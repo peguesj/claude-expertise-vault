@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Elixir/Phoenix
+expertise_api/_build/
+expertise_api/deps/
+expertise_api/.elixir_ls/
+expertise_api/priv/static/assets/
+
+# Swift
+ExpertiseApp/.build/
+ExpertiseApp/build/
+ExpertiseApp/.swiftpm/
+
+# macOS
+.DS_Store
+*.xcodeproj/xcuserdata/
+
+# IDE
+.idea/
+.vscode/
+
+# Hooks logs
+.claude/hooks/logs/
