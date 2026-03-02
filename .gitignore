@@ -22,5 +22,9 @@ ExpertiseApp/.swiftpm/
 .idea/
 .vscode/
 
+# Data artifacts (large/binary)
+data/images/
+data/expertise.db
+
 # Hooks logs
 .claude/hooks/logs/

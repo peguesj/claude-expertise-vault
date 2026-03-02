@@ -26,5 +26,14 @@ defmodule ExpertiseApiWeb.Router do
 
     get "/search", SearchController, :search
     get "/health", SearchController, :health
+    get "/stats", SearchController, :stats
+    get "/ask", SearchController, :ask
+    get "/taxonomy", SearchController, :taxonomy
+    get "/resources", SearchController, :resources
+    post "/scan", SearchController, :scan
+    post "/import", SearchController, :import_data
+    post "/scrape-images", SearchController, :scrape_images
+    post "/ingest", SearchController, :ingest
+    post "/ask", SearchController, :ask
   end
 end

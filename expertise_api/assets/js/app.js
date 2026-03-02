@@ -26,10 +26,26 @@ import {hooks as colocatedHooks} from "phoenix-colocated/expertise_api"
 import topbar from "../vendor/topbar"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
+
+// Mermaid diagram hook
+const Mermaid = {
+  mounted() {
+    if (window.mermaid) {
+      mermaid.initialize({ startOnLoad: false, theme: "dark" })
+      this.el.querySelectorAll(".mermaid-diagram").forEach(el => {
+        const id = "mermaid-" + Math.random().toString(36).substr(2, 9)
+        mermaid.render(id, el.dataset.mermaid, svgCode => {
+          el.innerHTML = svgCode
+        })
+      })
+    }
+  }
+}
+
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks},
+  hooks: {...colocatedHooks, Mermaid},
 })
 
 // Show progress bar on live navigation and form submits
