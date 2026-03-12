@@ -415,7 +415,8 @@ ${(data.text || "").slice(0, 4000)}`;
   // ── UI State ──────────────────────────────────────────────────────────────
 
   let fabBtn = null;
-  let iframe = null;
+  let panelHost = null;   // outer fixed-position container
+  let panelRoot = null;   // shadow root for style isolation
   let visible = false;
   let curData = null;
   let refinedData = null;
@@ -456,21 +457,23 @@ ${(data.text || "").slice(0, 4000)}`;
     setInterval(checkServerHealth, 60000);
   }
 
-  // ── Iframe Management ─────────────────────────────────────────────────────
-  // Key insight: blob: iframe scripts get blocked by host CSP.
-  // Solution: NO scripts in the iframe. All behavior wired from parent via contentDocument.
+  // ── Panel Management (Shadow DOM) ────────────────────────────────────────
+  // Shadow DOM bypasses all CSP restrictions — no iframe, no blob:, no srcdoc.
+  // Styles are fully isolated from the host page.
 
-  const IFRAME_BASE = "position:fixed; bottom:80px; right:24px; width:460px; border:none; border-radius:16px; z-index:2147483647; box-shadow:0 20px 60px rgba(0,0,0,0.6),0 0 0 1px rgba(124,58,237,0.3); background:#0f0f1a; overflow:hidden;";
+  const PANEL_BASE = "position:fixed !important; bottom:80px !important; right:24px !important; width:460px !important; border:none !important; border-radius:16px !important; z-index:2147483647 !important; box-shadow:0 20px 60px rgba(0,0,0,0.6),0 0 0 1px rgba(124,58,237,0.3) !important; background:#0f0f1a !important; overflow:hidden !important;";
 
-  function setIframeStyle(h) {
-    iframe.setAttribute("style", IFRAME_BASE + " height:" + h + "px; max-height:75vh; opacity:1; pointer-events:auto;");
+  function setPanelHeight(h) {
+    panelHost.setAttribute("style", PANEL_BASE + " height:" + h + "px !important; max-height:75vh !important; opacity:1 !important; pointer-events:auto !important;");
   }
 
   function toggle() { visible ? hide() : show(); }
 
   function hide() {
     visible = false;
-    if (iframe && iframe.parentNode) iframe.parentNode.removeChild(iframe);
+    if (panelHost && panelHost.parentNode) panelHost.parentNode.removeChild(panelHost);
+    panelHost = null;
+    panelRoot = null;
   }
 
   function show() {
@@ -482,30 +485,53 @@ ${(data.text || "").slice(0, 4000)}`;
     renderPreview(curData, platform, multiCount);
   }
 
-  // Write HTML into iframe and bind actions AFTER it loads
+  // Render HTML into a Shadow DOM panel and bind actions immediately.
+  // CSS is injected via CSSStyleSheet.replaceSync (completely CSP/Trusted-Types immune).
+  // Body content is parsed via DOMParser and cloned via importNode (avoids adoptNode
+  // cross-document transfer failures in restrictive CSP environments like LinkedIn).
   function writeIframe(html, height, bindFn) {
-    if (iframe && iframe.parentNode) iframe.parentNode.removeChild(iframe);
-    iframe = document.createElement("iframe");
-    iframe.setAttribute("sandbox", "allow-same-origin");  // allow contentDocument access, but NO scripts
-    setIframeStyle(height);
-    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-    iframe.src = URL.createObjectURL(blob);
-    iframe.addEventListener("load", function () {
-      try {
-        const doc = iframe.contentDocument;
-        if (doc && bindFn) bindFn(doc);
-      } catch (e) { /* cross-origin fallback: won't happen with same-origin sandbox */ }
-    });
-    document.body.appendChild(iframe);
+    if (panelHost && panelHost.parentNode) panelHost.parentNode.removeChild(panelHost);
+    panelHost = document.createElement("div");
+    panelHost.id = "cev-panel-host";
+    setPanelHeight(height);
+    panelRoot = panelHost.attachShadow({ mode: "open" });
+
+    // 1. Inject CSS directly (NOT from parsed doc) — immune to all CSP/Trusted Types
+    try {
+      var sheet = new CSSStyleSheet();
+      sheet.replaceSync(CSS);
+      panelRoot.adoptedStyleSheets = [sheet];
+    } catch (_e) {
+      var styleEl = document.createElement("style");
+      styleEl.textContent = CSS;
+      panelRoot.appendChild(styleEl);
+    }
+
+    // 2. Extract body HTML and parse it via DOMParser
+    var bodyMatch = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+    var bodyHtml = bodyMatch ? bodyMatch[1] : html;
+    var parser = new DOMParser();
+    var parsed = parser.parseFromString("<html><body>" + bodyHtml + "</body></html>", "text/html");
+
+    // 3. Clone body children into wrapper via importNode (not adoptNode)
+    var wrapper = document.createElement("div");
+    wrapper.className = "cev-panel-inner";
+    var children = Array.from(parsed.body.childNodes);
+    for (var i = 0; i < children.length; i++) {
+      wrapper.appendChild(document.importNode(children[i], true));
+    }
+    panelRoot.appendChild(wrapper);
+
+    document.body.appendChild(panelHost);
     visible = true;
+    if (bindFn) bindFn(panelRoot);
   }
 
-  // Show a toast inside the iframe (direct DOM manipulation, no scripts needed)
+  // Show a toast inside the shadow DOM panel
   function showToast(msg, type) {
     try {
-      const doc = iframe.contentDocument;
-      if (!doc) return;
-      const t = doc.getElementById("toast");
+      if (!panelRoot) return;
+      const t = panelRoot.getElementById("toast");
       if (!t) return;
       t.textContent = msg;
       t.className = "toast " + type;
@@ -514,34 +540,34 @@ ${(data.text || "").slice(0, 4000)}`;
     } catch {}
   }
 
-  // Helper: read form values from iframe contentDocument
-  function readField(doc, id) {
-    const el = doc.getElementById(id);
+  // Helper: read form values from shadow root
+  function readField(root, id) {
+    const el = root.getElementById(id);
     return el ? el.value.trim() : "";
   }
 
-  function readForm(doc) {
+  function readForm(root) {
     return {
-      platform: readField(doc, "f-platform"),
-      author: readField(doc, "f-author"),
-      likes: readField(doc, "f-likes"),
-      comments: readField(doc, "f-comments"),
-      reposts: readField(doc, "f-reposts"),
-      tags: readField(doc, "f-tags"),
-      text: readField(doc, "f-text"),
-      media: readField(doc, "f-media"),
-      url: readField(doc, "f-url"),
+      platform: readField(root, "f-platform"),
+      author: readField(root, "f-author"),
+      likes: readField(root, "f-likes"),
+      comments: readField(root, "f-comments"),
+      reposts: readField(root, "f-reposts"),
+      tags: readField(root, "f-tags"),
+      text: readField(root, "f-text"),
+      media: readField(root, "f-media"),
+      url: readField(root, "f-url"),
     };
   }
 
   // Helper: bind click to a data-action attribute
-  function bindActions(doc, handlers) {
-    doc.querySelectorAll("[data-action]").forEach(el => {
+  function bindActions(root, handlers) {
+    root.querySelectorAll("[data-action]").forEach(el => {
       const action = el.getAttribute("data-action");
       if (handlers[action]) {
         el.addEventListener("click", e => {
           e.preventDefault();
-          handlers[action](doc, el);
+          handlers[action](root, el);
         });
       }
     });
@@ -550,7 +576,8 @@ ${(data.text || "").slice(0, 4000)}`;
   // ── CSS (shared across all panels) ────────────────────────────────────────
 
   const CSS = `*{box-sizing:border-box;margin:0;padding:0}
-html,body{background:#0f0f1a;color:#e2e2f0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;overflow:hidden;display:flex;flex-direction:column;height:100%}
+:host{display:block;overflow:hidden;border-radius:16px;height:100%;width:100%}
+.cev-panel-inner{background:#0f0f1a;color:#e2e2f0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;overflow:hidden;display:flex;flex-direction:column;height:100%}
 .hdr{display:flex;align-items:center;justify-content:space-between;padding:12px 16px;background:#151528;border-bottom:1px solid #2a2a45}
 .hdr-left{display:flex;align-items:center;gap:10px}
 .hdr-icon{width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#7c3aed,#a855f7);display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:800;flex-shrink:0}
@@ -771,7 +798,7 @@ html,body{background:#0f0f1a;color:#e2e2f0;font:14px/1.5 -apple-system,BlinkMacS
           // Show progress bar
           let prog = d.querySelector(".cev-batch-progress");
           if (!prog) {
-            prog = d.createElement("div");
+            prog = document.createElement("div");
             prog.className = "cev-batch-progress";
             prog.setAttribute("style", "margin:8px 20px;height:4px;border-radius:2px;background:#1e1e3a;overflow:hidden;");
             prog.innerHTML = '<div style="height:100%;width:0%;background:linear-gradient(90deg,#7c3aed,#a78bfa);border-radius:2px;transition:width 0.3s;"></div>';
