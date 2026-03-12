@@ -122,3 +122,66 @@ struct RelatedResource: Codable, Identifiable {
     let url: String
     let type: String?
 }
+
+// MARK: - Analytics models
+
+struct TopQuery: Codable, Identifiable {
+    var id: String { query }
+    let query: String
+    let count: Int
+    let avgResults: Double
+    let avgLatencyMs: Double
+
+    enum CodingKeys: String, CodingKey {
+        case query, count
+        case avgResults = "avg_results"
+        case avgLatencyMs = "avg_latency_ms"
+    }
+}
+
+struct TopQueriesResponse: Codable {
+    let queries: [TopQuery]
+    let count: Int
+}
+
+struct UserPreference: Codable, Identifiable {
+    var id: String { tag }
+    let tag: String
+    let weight: Double
+    let rawWeight: Double
+    let interactions: Int
+    let lastUpdated: String?
+
+    enum CodingKeys: String, CodingKey {
+        case tag, weight, interactions
+        case rawWeight = "raw_weight"
+        case lastUpdated = "last_updated"
+    }
+}
+
+struct PreferencesResponse: Codable {
+    let preferences: [UserPreference]
+    let count: Int
+}
+
+struct RecommendedPost: Codable, Identifiable {
+    let id: String
+    let author: String
+    let platform: String
+    let url: String?
+    let text: String
+    let likes: Int
+    let comments: Int
+    let reposts: Int
+    let recommendationScore: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case id, author, platform, url, text, likes, comments, reposts
+        case recommendationScore = "recommendation_score"
+    }
+}
+
+struct RecommendationsResponse: Codable {
+    let recommendations: [RecommendedPost]
+    let strategy: String
+}

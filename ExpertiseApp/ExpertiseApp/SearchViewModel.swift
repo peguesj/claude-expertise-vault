@@ -23,6 +23,16 @@ class SearchViewModel: ObservableObject {
     @Published var isLoadingInsights: Bool = false
     @Published var showInsights: Bool = true
 
+    // MARK: - Insights badge (menubar)
+    @Published var newInsightsCount: Int = 0
+
+    func clearNewInsights() { newInsightsCount = 0 }
+
+    // MARK: - Start page state
+    @Published var recommendations: [RecommendedPost] = []
+    @Published var topQueries: [TopQuery] = []
+    @Published var isLoadingStartPage: Bool = false
+
     // MARK: - Server / UI state
     @Published var serverOnline: Bool = false
     @Published var stats: StatsResponse? = nil
@@ -31,6 +41,8 @@ class SearchViewModel: ObservableObject {
     @Published var autoScanEnabled: Bool = false
     @Published var showingStats: Bool = false
     @Published var launchAtLogin: Bool = false
+    @Published var autoVikiSync: Bool = false
+    @Published var vikiSyncStatus: String? = nil
 
     // MARK: - Tasks
     private var searchTask: Task<Void, Never>?
@@ -49,9 +61,11 @@ class SearchViewModel: ObservableObject {
 
     init() {
         launchAtLogin = UserDefaults.standard.bool(forKey: "launchAtLogin")
+        autoVikiSync = UserDefaults.standard.bool(forKey: "autoVikiSync")
         Task {
             await checkServer()
             await refreshStats()
+            await refreshStartPage()
         }
     }
 
@@ -114,6 +128,7 @@ class SearchViewModel: ObservableObject {
         isSearching = true
         error = nil
         insightResponse = nil
+        let start = Date()
 
         searchTask = Task {
             do {
@@ -121,6 +136,8 @@ class SearchViewModel: ObservableObject {
                 guard !Task.isCancelled else { return }
                 self.results = fetched
                 self.scheduleInsights()
+                let latency = Int(Date().timeIntervalSince(start) * 1000)
+                Task { await APIClient.shared.logSearch(query: trimmed, mode: "search", resultCount: fetched.count, latencyMs: latency) }
             } catch {
                 guard !Task.isCancelled else { return }
                 self.error = error.localizedDescription
@@ -139,10 +156,14 @@ class SearchViewModel: ObservableObject {
         isAsking = true
         askResponse = nil
         error = nil
+        let start = Date()
 
         do {
             let response = try await APIClient.shared.ask(query: trimmed)
             self.askResponse = response
+            self.newInsightsCount += 1
+            let latency = Int(Date().timeIntervalSince(start) * 1000)
+            Task { await APIClient.shared.logSearch(query: trimmed, mode: "ask", resultCount: response.citations.count, latencyMs: latency) }
         } catch {
             self.error = "Ask failed: \(error.localizedDescription)"
         }
@@ -167,6 +188,7 @@ class SearchViewModel: ObservableObject {
         isLoadingInsights = true
         do {
             insightResponse = try await APIClient.shared.ask(query: trimmed)
+            newInsightsCount += 1
         } catch {
             // Insights are supplemental — fail silently
         }
@@ -219,6 +241,7 @@ class SearchViewModel: ObservableObject {
             _ = try await APIClient.shared.triggerScan()
             pipelineStatus = "Scan complete"
             await refreshStats()
+            syncToVikiIfEnabled()
         } catch {
             pipelineStatus = "Scan failed: \(error.localizedDescription)"
         }
@@ -233,6 +256,7 @@ class SearchViewModel: ObservableObject {
             _ = try await APIClient.shared.triggerImport()
             pipelineStatus = "Import complete"
             await refreshStats()
+            syncToVikiIfEnabled()
         } catch {
             pipelineStatus = "Import failed: \(error.localizedDescription)"
         }
@@ -271,6 +295,28 @@ class SearchViewModel: ObservableObject {
         }
     }
 
+    // MARK: - VIKI Sync
+
+    func setAutoVikiSync(_ enabled: Bool) {
+        autoVikiSync = enabled
+        UserDefaults.standard.set(enabled, forKey: "autoVikiSync")
+    }
+
+    func syncToViki() async {
+        vikiSyncStatus = "Syncing with VIKI..."
+        let success = await APIClient.shared.syncToViki()
+        vikiSyncStatus = success ? "VIKI sync complete" : "VIKI unreachable (skipped)"
+        Task {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if vikiSyncStatus != nil { vikiSyncStatus = nil }
+        }
+    }
+
+    private func syncToVikiIfEnabled() {
+        guard autoVikiSync else { return }
+        Task { await syncToViki() }
+    }
+
     // MARK: - Launch at login
 
     func setLaunchAtLogin(_ enabled: Bool) {
@@ -285,6 +331,24 @@ class SearchViewModel: ObservableObject {
         } catch {
             // May fail for non-bundle builds; preference is still stored
         }
+    }
+
+    // MARK: - Start page
+
+    func refreshStartPage() async {
+        isLoadingStartPage = true
+        async let recs = try? APIClient.shared.fetchRecommendations()
+        async let queries = try? APIClient.shared.fetchTopQueries(limit: 8)
+        recommendations = (await recs)?.recommendations ?? []
+        topQueries = (await queries)?.queries ?? []
+        isLoadingStartPage = false
+    }
+
+    // MARK: - Interaction tracking
+
+    func trackResultClick(postId: String) {
+        let trimmed = query.trimmingCharacters(in: .whitespaces)
+        Task { await APIClient.shared.logInteraction(query: trimmed, postId: postId, action: "click") }
     }
 
     // MARK: - Misc

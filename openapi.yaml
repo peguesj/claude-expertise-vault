@@ -1,0 +1,1223 @@
+openapi: 3.1.0
+info:
+  title: Claude Expertise Vault API
+  version: "3.0.0"
+  description: |
+    Knowledge base API for Claude Code expert practices. Provides semantic
+    vector search, AI-powered Q&A grounded in real practitioner knowledge,
+    taxonomy navigation, resource discovery, content ingestion, and analytics.
+
+    Built on Phoenix/Elixir with a Python FAISS backend for embedding and
+    search, and an SQLite database for taxonomy, resources, and insights.
+  contact:
+    name: Claude Expertise Vault
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:8645
+    description: Local development server
+
+tags:
+  - name: Search
+    description: Semantic vector search and AI-powered Q&A
+  - name: AI
+    description: AI-generated answers grounded in the expertise database
+  - name: Pipeline
+    description: Data pipeline operations (scan, import, ingest, image scraping)
+  - name: Analytics
+    description: Usage analytics, recommendations, and preference tracking
+  - name: Database
+    description: Taxonomy navigation and resource browsing
+
+paths:
+  # ---------------------------------------------------------------------------
+  # Health & Stats
+  # ---------------------------------------------------------------------------
+  /api/health:
+    get:
+      operationId: getHealth
+      summary: Health check
+      description: Returns service health status. Used by clients to verify the API is reachable.
+      tags: [Database]
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /api/stats:
+    get:
+      operationId: getStats
+      summary: Database statistics
+      description: |
+        Returns counts of raw posts, processed chunks, downloaded images,
+        vector index status, and the list of tracked authors.
+      tags: [Database]
+      responses:
+        "200":
+          description: Current database statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatsResponse"
+
+  # ---------------------------------------------------------------------------
+  # Search
+  # ---------------------------------------------------------------------------
+  /api/search:
+    get:
+      operationId: searchExpertise
+      summary: Semantic vector search
+      description: |
+        Searches the FAISS vector index using sentence-transformer embeddings.
+        Queries are automatically expanded with domain-specific synonyms for
+        better recall (e.g., "agents working together" expands to include
+        "swarm coordination multi-agent orchestration").
+
+        Returns matching post chunks ranked by cosine similarity score.
+      tags: [Search]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: |
+            Natural language search query. Supports technical terms,
+            questions, and general descriptions. Semantic expansion is
+            applied automatically.
+          schema:
+            type: string
+            minLength: 1
+          example: "how to use claude code hooks"
+        - name: top_k
+          in: query
+          required: false
+          description: Maximum number of results to return.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 5
+          example: 5
+        - name: min_score
+          in: query
+          required: false
+          description: Minimum cosine similarity threshold (0.0 to 1.0). Results below this score are excluded.
+          schema:
+            type: number
+            format: float
+            minimum: 0.0
+            maximum: 1.0
+            default: 0.25
+          example: 0.25
+      responses:
+        "200":
+          description: Search results ordered by relevance score (descending)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "500":
+          description: Internal server error (e.g., FAISS index not found)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ---------------------------------------------------------------------------
+  # AI Q&A
+  # ---------------------------------------------------------------------------
+  /api/ask:
+    get:
+      operationId: askExpertiseGet
+      summary: AI-powered Q&A (GET)
+      description: |
+        Answers a question using AI grounded in the expertise knowledge base.
+        Retrieves relevant source chunks via vector search, assembles context
+        with taxonomy tags and resources, then generates an answer using the
+        configured AI backend (LiteLLM proxy, Claude CLI, or Anthropic API).
+
+        Set `no_ai=true` to skip AI generation and receive only the retrieved
+        context and source summaries.
+      tags: [AI]
+      parameters:
+        - name: q
+          in: query
+          required: true
+          description: Natural language question to answer.
+          schema:
+            type: string
+            minLength: 1
+          example: "best stack for agentic programming?"
+        - name: top_k
+          in: query
+          required: false
+          description: Number of source chunks to retrieve for context.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 50
+            default: 8
+          example: 8
+        - name: no_ai
+          in: query
+          required: false
+          description: |
+            If "true", skip the AI generation step and return only the
+            retrieved context with source summaries. Useful for inspecting
+            what sources would be used without incurring an AI API call.
+          schema:
+            type: string
+            enum: ["true", "false"]
+            default: "false"
+          example: "false"
+      responses:
+        "200":
+          description: AI-generated answer with citations and metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AskResponse"
+        "400":
+          description: Missing required parameter `q`
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "Missing required parameter: q"
+        "500":
+          description: AI backend or search failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    post:
+      operationId: askExpertisePost
+      summary: AI-powered Q&A (POST)
+      description: |
+        Same as GET /api/ask but accepts parameters in the request body.
+        Useful for longer questions or when query string length is a concern.
+      tags: [AI]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [q]
+              properties:
+                q:
+                  type: string
+                  minLength: 1
+                  description: Natural language question to answer.
+                  example: "how do agent swarms coordinate?"
+                top_k:
+                  type: integer
+                  minimum: 1
+                  maximum: 50
+                  default: 8
+                  description: Number of source chunks to retrieve for context.
+                no_ai:
+                  type: string
+                  enum: ["true", "false"]
+                  default: "false"
+                  description: Skip AI generation and return context only.
+      responses:
+        "200":
+          description: AI-generated answer with citations and metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AskResponse"
+        "400":
+          description: Missing required parameter `q`
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: AI backend or search failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ---------------------------------------------------------------------------
+  # Taxonomy & Resources
+  # ---------------------------------------------------------------------------
+  /api/taxonomy:
+    get:
+      operationId: getTaxonomy
+      summary: Full taxonomy tree
+      description: |
+        Returns the complete hierarchical taxonomy used to classify expertise
+        content. Categories include topics, techniques, tools, concepts,
+        frameworks, and patterns.
+      tags: [Database]
+      responses:
+        "200":
+          description: Taxonomy tree structure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaxonomyResponse"
+        "500":
+          description: Database query failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/resources:
+    get:
+      operationId: getResources
+      summary: Browse discovered resources
+      description: |
+        Returns external links, repositories, and tools discovered in expert
+        posts. Optionally filtered by resource type and/or taxonomy tag.
+      tags: [Database]
+      parameters:
+        - name: type
+          in: query
+          required: false
+          description: |
+            Filter by resource type. Common values: github, link, tool,
+            documentation, video, article.
+          schema:
+            type: string
+          example: "github"
+        - name: tag
+          in: query
+          required: false
+          description: Filter by taxonomy tag associated with the resource's source post.
+          schema:
+            type: string
+          example: "agent-swarms"
+      responses:
+        "200":
+          description: List of matching resources
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResourcesResponse"
+        "500":
+          description: Database query failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  # ---------------------------------------------------------------------------
+  # Pipeline Operations
+  # ---------------------------------------------------------------------------
+  /api/scan:
+    post:
+      operationId: scanContent
+      summary: Scan for new content
+      description: |
+        Triggers a scan for new posts and media URLs for the given author.
+        Runs `scrape_images.py --update-raw` to discover new content in raw
+        data files.
+      tags: [Pipeline]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                author:
+                  type: string
+                  default: "mitko-vasilev"
+                  description: Author slug to scan (matches raw JSONL filename).
+                  example: "mitko-vasilev"
+      responses:
+        "200":
+          description: Scan completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PipelineResponse"
+              example:
+                status: "ok"
+                action: "scan"
+                result: "Scanned 115 posts, found 3 new images"
+        "500":
+          description: Scan script failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/import:
+    post:
+      operationId: importData
+      summary: Run full import pipeline
+      description: |
+        Executes the full data pipeline for the given author:
+        1. Ingest raw JSONL into processed chunks (`ingest.py`)
+        2. Generate embeddings and rebuild the FAISS index (`embed.py`)
+
+        The result contains output from both pipeline stages.
+      tags: [Pipeline]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                author:
+                  type: string
+                  default: "mitko-vasilev"
+                  description: Author slug to process (matches raw JSONL filename).
+                  example: "mitko-vasilev"
+      responses:
+        "200":
+          description: Import pipeline completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PipelineResponse"
+              example:
+                status: "ok"
+                action: "import"
+                result: "{\"ingest\": \"Processed 115 posts into 142 chunks\", \"embed\": \"Built index with 142 vectors\"}"
+        "500":
+          description: Pipeline script failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/scrape-images:
+    post:
+      operationId: scrapeImages
+      summary: Download images from posts
+      description: |
+        Downloads media (images) referenced in posts for the given author.
+        Images are stored locally at `data/images/{author}/{post_id}/`.
+      tags: [Pipeline]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                author:
+                  type: string
+                  default: "mitko-vasilev"
+                  description: Author slug whose post images to download.
+                  example: "mitko-vasilev"
+      responses:
+        "200":
+          description: Image scraping completed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PipelineResponse"
+              example:
+                status: "ok"
+                action: "scrape_images"
+                result: "Downloaded 24 images for mitko-vasilev"
+        "500":
+          description: Image scraping failure
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/ingest:
+    post:
+      operationId: ingestPosts
+      summary: Ingest posts from external sources
+      description: |
+        Accepts an array of post objects (typically from the Tampermonkey
+        browser userscript) and ingests them into the system. Also accepts
+        a single post object without the `posts` wrapper array.
+
+        Posts are stored in raw JSONL format and made available for the
+        import pipeline.
+      tags: [Pipeline]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  required: [posts]
+                  properties:
+                    posts:
+                      type: array
+                      items:
+                        $ref: "#/components/schemas/PostInput"
+                      minItems: 1
+                      description: Array of posts to ingest.
+                - $ref: "#/components/schemas/PostInput"
+            examples:
+              batch:
+                summary: Batch ingest multiple posts
+                value:
+                  posts:
+                    - id: "expert-42"
+                      author: "Mitko Vasilev"
+                      date: "2025-12-15T10:30:00Z"
+                      url: "https://linkedin.com/feed/update/urn:li:activity:123"
+                      text: "Claude Code hooks are incredibly powerful for automating workflows..."
+                      media: []
+                      links: ["https://docs.anthropic.com/claude-code/hooks"]
+                      likes: 88
+                      comments: 12
+                      reposts: 3
+                      tags: ["claude-code", "hooks", "automation"]
+                      platform: "linkedin"
+              single:
+                summary: Ingest a single post
+                value:
+                  id: "expert-42"
+                  author: "Mitko Vasilev"
+                  date: "2025-12-15T10:30:00Z"
+                  url: "https://linkedin.com/feed/update/urn:li:activity:123"
+                  text: "Claude Code hooks are incredibly powerful..."
+                  media: []
+                  links: []
+                  likes: 88
+                  comments: 12
+                  reposts: 3
+                  tags: ["claude-code", "hooks"]
+                  platform: "linkedin"
+      responses:
+        "200":
+          description: Posts ingested successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestResponse"
+              example:
+                status: "ok"
+                action: "ingest"
+                ingested: 3
+        "422":
+          description: Validation or processing error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "Invalid post format: missing required field 'id'"
+
+  # ---------------------------------------------------------------------------
+  # Analytics (Planned)
+  # ---------------------------------------------------------------------------
+  /api/analytics/search:
+    post:
+      operationId: logSearchEvent
+      summary: Log a search event
+      description: |
+        Records a search event for analytics. Tracks what users search for,
+        which mode they use, result counts, and latency.
+      tags: [Analytics]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchAnalyticsEvent"
+      responses:
+        "200":
+          description: Search event recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    const: "ok"
+                  event_id:
+                    type: string
+                    description: Unique identifier for the logged event.
+                required: [status]
+        "422":
+          description: Invalid event payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/analytics/interaction:
+    post:
+      operationId: logInteraction
+      summary: Log a user interaction
+      description: |
+        Records a user interaction with a search result (click, dwell time).
+        Used to improve ranking and generate personalized recommendations.
+      tags: [Analytics]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InteractionEvent"
+      responses:
+        "200":
+          description: Interaction event recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    const: "ok"
+                  event_id:
+                    type: string
+                    description: Unique identifier for the logged event.
+                required: [status]
+        "422":
+          description: Invalid event payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /api/analytics/top-queries:
+    get:
+      operationId: getTopQueries
+      summary: Top queries by frequency
+      description: |
+        Returns the most frequently searched queries, ordered by count.
+        Useful for discovering trending topics and popular search patterns.
+      tags: [Analytics]
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of top queries to return.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+          example: 20
+      responses:
+        "200":
+          description: Top queries ranked by frequency
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TopQueriesResponse"
+
+  /api/analytics/recommendations:
+    get:
+      operationId: getRecommendations
+      summary: Personalized post recommendations
+      description: |
+        Returns personalized content recommendations based on the user's
+        search history, interaction patterns, and preference vector.
+      tags: [Analytics]
+      responses:
+        "200":
+          description: Recommended posts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecommendationsResponse"
+
+  /api/analytics/preferences:
+    get:
+      operationId: getPreferences
+      summary: User preference vector
+      description: |
+        Returns the computed user preference vector based on search and
+        interaction history. Represents the user's topical interests as
+        weighted tags.
+      tags: [Analytics]
+      responses:
+        "200":
+          description: User preference data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PreferencesResponse"
+
+# =============================================================================
+# Component Schemas
+# =============================================================================
+components:
+  schemas:
+    # -------------------------------------------------------------------------
+    # Error
+    # -------------------------------------------------------------------------
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message.
+          example: "Script search.py exited with 1: No index found."
+
+    # -------------------------------------------------------------------------
+    # Health
+    # -------------------------------------------------------------------------
+    HealthResponse:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          const: "ok"
+          example: "ok"
+        service:
+          type: string
+          const: "expertise_api"
+          example: "expertise_api"
+
+    # -------------------------------------------------------------------------
+    # Stats
+    # -------------------------------------------------------------------------
+    StatsResponse:
+      type: object
+      required: [raw_posts, processed_chunks, images, index_exists, authors]
+      properties:
+        raw_posts:
+          type: integer
+          description: Total number of raw posts across all author JSONL files.
+          example: 115
+        processed_chunks:
+          type: integer
+          description: Total number of processed chunks ready for embedding.
+          example: 142
+        images:
+          type: integer
+          description: Total number of downloaded image files.
+          example: 87
+        index_exists:
+          type: boolean
+          description: Whether the FAISS vector index file exists.
+          example: true
+        authors:
+          type: array
+          items:
+            type: string
+          description: List of author slugs with raw data files.
+          example: ["mitko-vasilev"]
+
+    # -------------------------------------------------------------------------
+    # Search
+    # -------------------------------------------------------------------------
+    SearchResponse:
+      type: object
+      required: [query, results, count]
+      properties:
+        query:
+          type: string
+          description: The original search query as submitted.
+          example: "how to use claude code hooks"
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/SearchResult"
+          description: Search results ordered by descending similarity score.
+        count:
+          type: integer
+          description: Number of results returned.
+          example: 5
+
+    SearchResult:
+      type: object
+      required:
+        - score
+        - chunk_id
+        - post_id
+        - author
+        - platform
+        - likes
+        - comments
+        - reposts
+        - chunk_index
+        - total_chunks
+        - text
+      properties:
+        score:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: Cosine similarity score between query and chunk embedding.
+          example: 0.782
+        chunk_id:
+          type: string
+          description: Unique identifier for this chunk (format `{post_id}_c{index}`).
+          example: "mitko-42_c0"
+        post_id:
+          type: string
+          description: Identifier of the source post.
+          example: "mitko-42"
+        author:
+          type: string
+          description: Display name of the post author.
+          example: "Mitko Vasilev"
+        platform:
+          type: string
+          description: Platform where the post was published.
+          enum: [linkedin, x, youtube, github, blog, other]
+          example: "linkedin"
+        likes:
+          type: integer
+          description: Like/reaction count at time of scraping.
+          example: 88
+        comments:
+          type: integer
+          description: Comment count at time of scraping.
+          example: 12
+        reposts:
+          type: integer
+          description: Repost/share count at time of scraping.
+          example: 3
+        chunk_index:
+          type: integer
+          description: Zero-based index of this chunk within its parent post.
+          example: 0
+        total_chunks:
+          type: integer
+          description: Total number of chunks the parent post was split into.
+          example: 1
+        text:
+          type: string
+          description: The chunk text content.
+          example: "Claude Code hooks are incredibly powerful for automating workflows..."
+        time_relative:
+          type: string
+          description: |
+            Relative time since posting at scrape time (e.g., "2d", "6h", "34m").
+          example: "2d"
+        url:
+          type: string
+          format: uri
+          description: URL of the original post.
+          example: "https://www.linkedin.com/in/ownyourai/recent-activity/all/"
+        images:
+          type: array
+          items:
+            type: string
+            format: uri
+          description: Image URLs associated with the post, if any.
+          example: ["https://media.licdn.com/dms/image/example.jpg"]
+
+    # -------------------------------------------------------------------------
+    # AI Q&A
+    # -------------------------------------------------------------------------
+    AskResponse:
+      type: object
+      required: [question, answer, citations, related_resources, taxonomy_tags, confidence]
+      properties:
+        question:
+          type: string
+          description: The original question as submitted.
+          example: "best stack for agentic programming?"
+        answer:
+          type: string
+          description: |
+            AI-generated answer grounded in expert knowledge sources. In
+            `no_ai` mode, contains a formatted summary of retrieved context.
+          example: "Based on expert knowledge, the recommended stack for agentic programming includes..."
+        citations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Citation"
+          description: Source chunks used to generate the answer, with relevance metadata.
+        related_resources:
+          type: array
+          items:
+            $ref: "#/components/schemas/RelatedResource"
+          description: External URLs and tools discovered in the cited source posts.
+        taxonomy_tags:
+          type: array
+          items:
+            type: string
+          description: Taxonomy tags associated with the cited posts.
+          example: ["agent-swarms", "claude-code", "local-ai"]
+        confidence:
+          type: string
+          enum: [high, medium, low]
+          description: |
+            Estimated answer confidence based on source coverage.
+            - **high**: Multiple sources agree and directly address the question (top score >= 0.50, 3+ high-relevance hits).
+            - **medium**: Some relevant sources but incomplete coverage (top score >= 0.35, 2+ medium-relevance hits).
+            - **low**: Sources are only tangentially related or no results found.
+          example: "high"
+
+    Citation:
+      type: object
+      required: [post_id, author, text_snippet, score]
+      properties:
+        post_id:
+          type: string
+          description: Source post identifier.
+          example: "mitko-42"
+        chunk_id:
+          type: string
+          description: Source chunk identifier.
+          example: "mitko-42_c0"
+        author:
+          type: string
+          description: Post author display name.
+          example: "Mitko Vasilev"
+        text_snippet:
+          type: string
+          description: Truncated excerpt from the source chunk (max 300 characters).
+          example: "Claude Code hooks allow you to run custom scripts before and after..."
+        score:
+          type: number
+          format: float
+          minimum: 0.0
+          maximum: 1.0
+          description: Cosine similarity relevance score.
+          example: 0.782
+        likes:
+          type: integer
+          description: Like/reaction count of the source post.
+          example: 88
+        comments:
+          type: integer
+          description: Comment count of the source post.
+          example: 12
+        platform:
+          type: string
+          description: Platform where the source post was published.
+          example: "linkedin"
+
+    RelatedResource:
+      type: object
+      required: [url]
+      properties:
+        url:
+          type: string
+          format: uri
+          description: URL of the external resource.
+          example: "https://github.com/anthropics/claude-code"
+        title:
+          type: string
+          description: Title or display name of the resource (may be empty if auto-discovered).
+          example: "Claude Code Repository"
+        type:
+          type: string
+          description: Resource type classification.
+          enum: [github, link, tool, documentation, video, article, repo]
+          example: "github"
+        post_id:
+          type: string
+          description: ID of the post where this resource was discovered.
+          example: "mitko-42"
+
+    # -------------------------------------------------------------------------
+    # Taxonomy
+    # -------------------------------------------------------------------------
+    TaxonomyResponse:
+      type: object
+      description: |
+        Hierarchical taxonomy tree. Structure varies by database content but
+        typically contains top-level categories (topics, techniques, tools,
+        concepts, frameworks, patterns) each with nested child tags.
+      additionalProperties: true
+      example:
+        topics:
+          - name: "agent-swarms"
+            count: 15
+          - name: "local-ai"
+            count: 22
+        techniques:
+          - name: "hooks"
+            count: 8
+
+    # -------------------------------------------------------------------------
+    # Resources
+    # -------------------------------------------------------------------------
+    ResourcesResponse:
+      type: object
+      required: [resources, count]
+      properties:
+        resources:
+          type: array
+          items:
+            $ref: "#/components/schemas/RelatedResource"
+          description: List of matching resources.
+        count:
+          type: integer
+          description: Number of resources returned.
+          example: 12
+
+    # -------------------------------------------------------------------------
+    # Pipeline
+    # -------------------------------------------------------------------------
+    PipelineResponse:
+      type: object
+      required: [status, action]
+      properties:
+        status:
+          type: string
+          const: "ok"
+          description: Operation status.
+          example: "ok"
+        action:
+          type: string
+          description: The pipeline action that was executed.
+          enum: [scan, import, scrape_images]
+          example: "scan"
+        result:
+          description: |
+            Output from the pipeline script. May be a plain string or a JSON
+            object (e.g., for import which returns both ingest and embed results).
+          oneOf:
+            - type: string
+            - type: object
+              properties:
+                ingest:
+                  type: string
+                  description: Output from the ingest stage.
+                embed:
+                  type: string
+                  description: Output from the embed stage.
+          example: "Processed 115 posts, found 3 new images"
+
+    IngestResponse:
+      type: object
+      required: [status, action, ingested]
+      properties:
+        status:
+          type: string
+          const: "ok"
+          example: "ok"
+        action:
+          type: string
+          const: "ingest"
+          example: "ingest"
+        ingested:
+          type: integer
+          description: Number of posts successfully ingested.
+          example: 3
+
+    # -------------------------------------------------------------------------
+    # Post Input (for ingest)
+    # -------------------------------------------------------------------------
+    PostInput:
+      type: object
+      required: [id, author, text, platform]
+      properties:
+        id:
+          type: string
+          description: Unique post identifier.
+          example: "expert-42"
+        author:
+          type: string
+          description: Author display name.
+          example: "Mitko Vasilev"
+        date:
+          type: string
+          format: date-time
+          description: ISO 8601 publication timestamp.
+          example: "2025-12-15T10:30:00Z"
+        url:
+          type: string
+          format: uri
+          description: URL of the original post.
+          example: "https://linkedin.com/feed/update/urn:li:activity:123"
+        text:
+          type: string
+          description: Full post text content.
+          example: "Claude Code hooks are incredibly powerful..."
+        media:
+          type: array
+          items:
+            type: string
+            format: uri
+          description: List of media (image) URLs embedded in the post.
+          example: ["https://media.licdn.com/dms/image/example.jpg"]
+        links:
+          type: array
+          items:
+            type: string
+            format: uri
+          description: External URLs discovered in the post text.
+          example: ["https://docs.anthropic.com/claude-code/hooks"]
+        likes:
+          type: integer
+          description: Like/reaction count.
+          default: 0
+          example: 88
+        comments:
+          type: integer
+          description: Comment count.
+          default: 0
+          example: 12
+        reposts:
+          type: integer
+          description: Repost/share count.
+          default: 0
+          example: 3
+        tags:
+          type: array
+          items:
+            type: string
+          description: Classification tags for the post.
+          example: ["claude-code", "hooks", "automation"]
+        platform:
+          type: string
+          description: Platform where the post was published.
+          enum: [x, linkedin, youtube, github, blog, other]
+          example: "linkedin"
+
+    # -------------------------------------------------------------------------
+    # Analytics
+    # -------------------------------------------------------------------------
+    SearchAnalyticsEvent:
+      type: object
+      required: [query, mode, results_count]
+      properties:
+        query:
+          type: string
+          description: The search query that was executed.
+          example: "agent swarm patterns"
+        mode:
+          type: string
+          description: Search mode used.
+          enum: [search, ask]
+          example: "search"
+        results_count:
+          type: integer
+          description: Number of results returned for the query.
+          example: 5
+        duration_ms:
+          type: integer
+          description: Search latency in milliseconds.
+          example: 342
+
+    InteractionEvent:
+      type: object
+      required: [query, result_id, action]
+      properties:
+        query:
+          type: string
+          description: The search query that produced the result.
+          example: "agent swarm patterns"
+        result_id:
+          type: string
+          description: Chunk ID or post ID of the result that was interacted with.
+          example: "mitko-42_c0"
+        action:
+          type: string
+          description: Type of user interaction.
+          enum: [click, dwell]
+          example: "click"
+        duration_ms:
+          type: integer
+          description: |
+            Dwell time in milliseconds (relevant for `dwell` action type).
+          example: 5200
+
+    TopQueriesResponse:
+      type: object
+      required: [queries, count]
+      properties:
+        queries:
+          type: array
+          items:
+            type: object
+            required: [query, count]
+            properties:
+              query:
+                type: string
+                description: The search query string.
+                example: "claude code hooks"
+              count:
+                type: integer
+                description: Number of times this query was searched.
+                example: 47
+              last_searched:
+                type: string
+                format: date-time
+                description: Timestamp of the most recent search with this query.
+                example: "2026-03-03T14:22:00Z"
+          description: Queries ranked by frequency (descending).
+        count:
+          type: integer
+          description: Total number of unique queries returned.
+          example: 20
+
+    RecommendationsResponse:
+      type: object
+      required: [recommendations]
+      properties:
+        recommendations:
+          type: array
+          items:
+            type: object
+            required: [post_id, author, text, score]
+            properties:
+              post_id:
+                type: string
+                description: Recommended post identifier.
+                example: "mitko-42"
+              author:
+                type: string
+                description: Post author display name.
+                example: "Mitko Vasilev"
+              text:
+                type: string
+                description: Post text excerpt.
+                example: "Claude Code hooks are incredibly powerful..."
+              score:
+                type: number
+                format: float
+                description: Recommendation relevance score.
+                example: 0.85
+              reason:
+                type: string
+                description: Brief explanation of why this post is recommended.
+                example: "Based on your interest in 'hooks' and 'automation'"
+          description: Personalized post recommendations.
+
+    PreferencesResponse:
+      type: object
+      required: [preferences]
+      properties:
+        preferences:
+          type: object
+          required: [tags, topics, authors]
+          properties:
+            tags:
+              type: array
+              items:
+                type: object
+                required: [tag, weight]
+                properties:
+                  tag:
+                    type: string
+                    description: Taxonomy tag.
+                    example: "claude-code"
+                  weight:
+                    type: number
+                    format: float
+                    description: Normalized preference weight (0.0 to 1.0).
+                    example: 0.92
+              description: Weighted tag preferences derived from interaction history.
+            topics:
+              type: array
+              items:
+                type: string
+              description: Top topic areas of interest.
+              example: ["agent-swarms", "local-ai", "hooks"]
+            authors:
+              type: array
+              items:
+                type: string
+              description: Most-engaged authors.
+              example: ["Mitko Vasilev"]

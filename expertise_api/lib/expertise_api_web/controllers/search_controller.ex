@@ -71,13 +71,8 @@ defmodule ExpertiseApiWeb.SearchController do
   end
 
   def stats(conn, _params) do
-    case ExpertiseApi.Pipeline.stats() do
-      {:ok, result} -> json(conn, result)
-      {:error, reason} ->
-        conn
-        |> put_status(500)
-        |> json(%{error: to_string(reason)})
-    end
+    {:ok, result} = ExpertiseApi.Pipeline.stats()
+    json(conn, result)
   end
 
   def ingest(conn, %{"posts" => posts}) when is_list(posts) do

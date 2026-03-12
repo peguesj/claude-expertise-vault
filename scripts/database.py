@@ -155,6 +155,35 @@ CREATE TABLE IF NOT EXISTS insights_poll_log (
     query TEXT,
     count INTEGER DEFAULT 0
 );
+
+-- Search analytics history
+CREATE TABLE IF NOT EXISTS search_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    query TEXT NOT NULL,
+    mode TEXT NOT NULL DEFAULT 'search',
+    result_count INTEGER DEFAULT 0,
+    latency_ms INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+);
+
+-- User preference vectors (weighted topic preferences)
+CREATE TABLE IF NOT EXISTS user_preferences (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tag TEXT NOT NULL UNIQUE,
+    weight REAL DEFAULT 1.0,
+    interaction_count INTEGER DEFAULT 0,
+    last_updated TEXT DEFAULT (datetime('now'))
+);
+
+-- Search interaction tracking (clicks, dwell time)
+CREATE TABLE IF NOT EXISTS search_interactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    query TEXT NOT NULL,
+    post_id TEXT,
+    action TEXT DEFAULT 'click',
+    dwell_ms INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+);
 """
 
 # Indexes for common query patterns
@@ -174,6 +203,11 @@ CREATE INDEX IF NOT EXISTS idx_images_post ON images(post_id);
 CREATE INDEX IF NOT EXISTS idx_insights_post ON insights(post_id);
 CREATE INDEX IF NOT EXISTS idx_insights_type ON insights(type);
 CREATE INDEX IF NOT EXISTS idx_chunks_post ON chunks(post_id);
+CREATE INDEX IF NOT EXISTS idx_search_history_query ON search_history(query);
+CREATE INDEX IF NOT EXISTS idx_search_history_created ON search_history(created_at);
+CREATE INDEX IF NOT EXISTS idx_search_interactions_query ON search_interactions(query);
+CREATE INDEX IF NOT EXISTS idx_search_interactions_post ON search_interactions(post_id);
+CREATE INDEX IF NOT EXISTS idx_user_preferences_tag ON user_preferences(tag);
 """
 
 # ---------------------------------------------------------------------------
@@ -1098,6 +1132,177 @@ def cmd_search(args: argparse.Namespace) -> None:
     conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Analytics functions
+# ---------------------------------------------------------------------------
+
+def analytics_log_search(conn: sqlite3.Connection, query: str, mode: str = "search",
+                         result_count: int = 0, latency_ms: int = 0) -> dict:
+    """Log a search event."""
+    cursor = conn.execute(
+        "INSERT INTO search_history (query, mode, result_count, latency_ms) VALUES (?, ?, ?, ?)",
+        (query, mode, result_count, latency_ms),
+    )
+    conn.commit()
+    return {"status": "ok", "event_id": str(cursor.lastrowid)}
+
+
+def analytics_log_interaction(conn: sqlite3.Connection, query: str, post_id: str,
+                              action: str = "click", dwell_ms: int = 0) -> dict:
+    """Log a user interaction with a search result."""
+    cursor = conn.execute(
+        "INSERT INTO search_interactions (query, post_id, action, dwell_ms) VALUES (?, ?, ?, ?)",
+        (query, post_id, action, dwell_ms),
+    )
+    conn.commit()
+    _update_preferences_from_interaction(conn, post_id)
+    return {"status": "ok", "event_id": str(cursor.lastrowid)}
+
+
+def _update_preferences_from_interaction(conn: sqlite3.Connection, post_id: str) -> None:
+    """Update user preferences based on tags of an interacted post."""
+    tags = conn.execute(
+        """SELECT t.name FROM post_tags pt
+           JOIN taxonomy t ON t.id = pt.taxonomy_id
+           WHERE pt.post_id = ?""",
+        (post_id,),
+    ).fetchall()
+    for row in tags:
+        tag = row["name"]
+        conn.execute(
+            """INSERT INTO user_preferences (tag, weight, interaction_count, last_updated)
+               VALUES (?, 1.0, 1, datetime('now'))
+               ON CONFLICT(tag) DO UPDATE SET
+                   weight = weight + 1.0,
+                   interaction_count = interaction_count + 1,
+                   last_updated = datetime('now')""",
+            (tag,),
+        )
+    conn.commit()
+
+
+def analytics_top_queries(conn: sqlite3.Connection, limit: int = 20) -> dict:
+    """Return top queries by frequency."""
+    rows = conn.execute(
+        """SELECT query, COUNT(*) as count, AVG(result_count) as avg_results,
+                  AVG(latency_ms) as avg_latency_ms
+           FROM search_history
+           GROUP BY query
+           ORDER BY count DESC
+           LIMIT ?""",
+        (limit,),
+    ).fetchall()
+    queries = [
+        {"query": r["query"], "count": r["count"],
+         "avg_results": round(r["avg_results"] or 0, 1),
+         "avg_latency_ms": round(r["avg_latency_ms"] or 0)}
+        for r in rows
+    ]
+    return {"queries": queries, "count": len(queries)}
+
+
+def analytics_preferences(conn: sqlite3.Connection) -> dict:
+    """Return user preference vector with 30-day half-life decay."""
+    import math
+    rows = conn.execute(
+        "SELECT tag, weight, interaction_count, last_updated FROM user_preferences ORDER BY weight DESC"
+    ).fetchall()
+    now = datetime.now()
+    half_life_days = 30
+    prefs = []
+    for r in rows:
+        last = datetime.fromisoformat(r["last_updated"]) if r["last_updated"] else now
+        days_ago = (now - last).days
+        decay = math.exp(-0.693 * days_ago / half_life_days)  # ln(2) ≈ 0.693
+        decayed_weight = round(r["weight"] * decay, 3)
+        if decayed_weight > 0.01:
+            prefs.append({
+                "tag": r["tag"],
+                "weight": decayed_weight,
+                "raw_weight": r["weight"],
+                "interactions": r["interaction_count"],
+                "last_updated": r["last_updated"],
+            })
+    return {"preferences": prefs, "count": len(prefs)}
+
+
+def analytics_recommendations(conn: sqlite3.Connection, limit: int = 10) -> dict:
+    """Return personalized post recommendations based on user preferences."""
+    prefs = analytics_preferences(conn)
+    pref_tags = {p["tag"]: p["weight"] for p in prefs.get("preferences", [])}
+
+    if not pref_tags:
+        # No preferences yet — return top posts by engagement
+        rows = conn.execute(
+            "SELECT * FROM posts ORDER BY likes DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return {"recommendations": [dict(r) for r in rows], "strategy": "top_engagement"}
+
+    # Score posts by preference-weighted tag overlap
+    all_posts = conn.execute(
+        "SELECT id, author, platform, url, text, likes, comments, reposts FROM posts"
+    ).fetchall()
+    scored = []
+    for post in all_posts:
+        post_tags = conn.execute(
+            """SELECT t.name FROM post_tags pt
+               JOIN taxonomy t ON t.id = pt.taxonomy_id
+               WHERE pt.post_id = ?""",
+            (post["id"],),
+        ).fetchall()
+        tag_names = [r["name"] for r in post_tags]
+        score = sum(pref_tags.get(t, 0) for t in tag_names)
+        engagement = (post["likes"] or 0) + (post["comments"] or 0) * 2
+        score += engagement * 0.01  # slight engagement boost
+        if score > 0:
+            p = dict(post)
+            p["recommendation_score"] = round(score, 3)
+            scored.append(p)
+
+    scored.sort(key=lambda x: x["recommendation_score"], reverse=True)
+    return {"recommendations": scored[:limit], "strategy": "preference_weighted"}
+
+
+def cmd_analytics_log(args: argparse.Namespace) -> None:
+    """Log a search event from CLI."""
+    conn = init_db(args.db)
+    result = analytics_log_search(conn, args.query, args.mode, args.result_count, args.latency_ms)
+    print(json.dumps(result))
+    conn.close()
+
+
+def cmd_analytics_interaction(args: argparse.Namespace) -> None:
+    """Log an interaction event from CLI."""
+    conn = init_db(args.db)
+    result = analytics_log_interaction(conn, args.query, args.post_id, args.action, args.dwell_ms)
+    print(json.dumps(result))
+    conn.close()
+
+
+def cmd_analytics_top(args: argparse.Namespace) -> None:
+    """Show top queries."""
+    conn = init_db(args.db)
+    result = analytics_top_queries(conn, args.limit)
+    print(json.dumps(result))
+    conn.close()
+
+
+def cmd_analytics_preferences(args: argparse.Namespace) -> None:
+    """Show user preferences."""
+    conn = init_db(args.db)
+    result = analytics_preferences(conn)
+    print(json.dumps(result))
+    conn.close()
+
+
+def cmd_analytics_recommendations(args: argparse.Namespace) -> None:
+    """Show recommendations."""
+    conn = init_db(args.db)
+    result = analytics_recommendations(conn)
+    print(json.dumps(result))
+    conn.close()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Claude Expertise Vault -- SQLite resource database",
@@ -1153,6 +1358,30 @@ examples:
     arr_parser.add_argument("--category", type=str)
     arr_parser.add_argument("--type", dest="type_filter", choices=["arr", "rr"])
 
+    # analytics-log
+    al_parser = subparsers.add_parser("analytics-log", help="Log a search event")
+    al_parser.add_argument("--query", required=True, type=str)
+    al_parser.add_argument("--mode", default="search", type=str)
+    al_parser.add_argument("--result-count", default=0, type=int)
+    al_parser.add_argument("--latency-ms", default=0, type=int)
+
+    # analytics-interaction
+    ai_parser = subparsers.add_parser("analytics-interaction", help="Log an interaction event")
+    ai_parser.add_argument("--query", required=True, type=str)
+    ai_parser.add_argument("--post-id", required=True, type=str)
+    ai_parser.add_argument("--action", default="click", type=str)
+    ai_parser.add_argument("--dwell-ms", default=0, type=int)
+
+    # analytics-top
+    at_parser = subparsers.add_parser("analytics-top", help="Show top queries")
+    at_parser.add_argument("--limit", default=20, type=int)
+
+    # analytics-preferences
+    subparsers.add_parser("analytics-preferences", help="Show user preferences")
+
+    # analytics-recommendations
+    subparsers.add_parser("analytics-recommendations", help="Show recommendations")
+
     args = parser.parse_args()
 
     commands = {
@@ -1163,6 +1392,11 @@ examples:
         "taxonomy": cmd_taxonomy,
         "search": cmd_search,
         "arr": cmd_arr,
+        "analytics-log": cmd_analytics_log,
+        "analytics-interaction": cmd_analytics_interaction,
+        "analytics-top": cmd_analytics_top,
+        "analytics-preferences": cmd_analytics_preferences,
+        "analytics-recommendations": cmd_analytics_recommendations,
     }
 
     commands[args.command](args)

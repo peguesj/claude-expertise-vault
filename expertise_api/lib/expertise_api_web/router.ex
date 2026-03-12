@@ -19,11 +19,13 @@ defmodule ExpertiseApiWeb.Router do
     pipe_through :browser
 
     live "/", SearchLive, :index
+    get "/docs", DocsController, :docs
   end
 
   scope "/api", ExpertiseApiWeb do
     pipe_through :api
 
+    # Core search & query
     get "/search", SearchController, :search
     get "/health", SearchController, :health
     get "/stats", SearchController, :stats
@@ -35,5 +37,15 @@ defmodule ExpertiseApiWeb.Router do
     post "/scrape-images", SearchController, :scrape_images
     post "/ingest", SearchController, :ingest
     post "/ask", SearchController, :ask
+
+    # OpenAPI spec
+    get "/openapi.yaml", DocsController, :openapi_spec
+
+    # Analytics
+    post "/analytics/search", AnalyticsController, :log_search
+    post "/analytics/interaction", AnalyticsController, :log_interaction
+    get "/analytics/top-queries", AnalyticsController, :top_queries
+    get "/analytics/recommendations", AnalyticsController, :recommendations
+    get "/analytics/preferences", AnalyticsController, :preferences
   end
 end

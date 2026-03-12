@@ -111,6 +111,91 @@ actor APIClient {
         }
         return try JSONDecoder().decode(AskResponse.self, from: data)
     }
+
+    // MARK: - Analytics
+
+    func logSearch(query: String, mode: String, resultCount: Int, latencyMs: Int) async {
+        let url = baseURL.appendingPathComponent("/api/analytics/search")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "query": query, "mode": mode,
+            "result_count": resultCount, "latency_ms": latencyMs
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        _ = try? await session.data(for: request)
+    }
+
+    func logInteraction(query: String, postId: String, action: String = "click", dwellMs: Int = 0) async {
+        let url = baseURL.appendingPathComponent("/api/analytics/interaction")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "query": query, "post_id": postId,
+            "action": action, "dwell_ms": dwellMs
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        _ = try? await session.data(for: request)
+    }
+
+    func fetchTopQueries(limit: Int = 20) async throws -> TopQueriesResponse {
+        var components = URLComponents(url: baseURL.appendingPathComponent("/api/analytics/top-queries"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        guard let url = components.url else { throw APIError.invalidURL }
+        let (data, response) = try await session.data(from: url)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw APIError.serverError
+        }
+        return try JSONDecoder().decode(TopQueriesResponse.self, from: data)
+    }
+
+    func fetchRecommendations() async throws -> RecommendationsResponse {
+        let url = baseURL.appendingPathComponent("/api/analytics/recommendations")
+        let (data, response) = try await session.data(from: url)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw APIError.serverError
+        }
+        return try JSONDecoder().decode(RecommendationsResponse.self, from: data)
+    }
+
+    // MARK: - VIKI Sync
+
+    func syncToViki(baseURL: String = "http://localhost:8000") async -> Bool {
+        guard let url = URL(string: "\(baseURL)/api/v1/hooks/metrics") else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 10
+
+        let payload: [String: Any] = [
+            "source": "claude-expertise-vault",
+            "metric_type": "expertise_sync",
+            "timestamp": ISO8601DateFormatter().string(from: Date()),
+            "data": [
+                "action": "sync_posts",
+                "api_base": "http://localhost:8645"
+            ]
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+
+        do {
+            let (_, response) = try await session.data(for: request)
+            return (response as? HTTPURLResponse)?.statusCode == 200
+        } catch {
+            return false
+        }
+    }
+
+    func fetchPreferences() async throws -> PreferencesResponse {
+        let url = baseURL.appendingPathComponent("/api/analytics/preferences")
+        let (data, response) = try await session.data(from: url)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw APIError.serverError
+        }
+        return try JSONDecoder().decode(PreferencesResponse.self, from: data)
+    }
 }
 
 enum APIError: LocalizedError {

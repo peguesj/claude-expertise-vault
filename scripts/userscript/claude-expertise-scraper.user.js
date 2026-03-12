@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Claude Expertise Scraper
-// @namespace    https://github.com/claude-expertise-vault
-// @version      3.1.0
-// @description  Intelligent knowledge extraction with AI refinement for the Claude Expertise Vault
+// @namespace    https://github.com/peguesj/claude-expertise-vault
+// @version      4.0.0
+// @description  Intelligent knowledge extraction with AI refinement, analytics, and server sync for the Claude Expertise Vault
 // @author       Claude Expertise Vault
 // @match        *://*/*
 // @grant        GM_setClipboard
@@ -17,8 +17,63 @@
 (function () {
   "use strict";
 
-  const DEFAULT_INGEST_API = "http://localhost:8645/api/ingest";
+  const DEFAULT_SERVER = "http://localhost:8645";
+  const DEFAULT_INGEST_API = DEFAULT_SERVER + "/api/ingest";
   const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
+
+  // ── Server Health ──────────────────────────────────────────────────────────
+  let serverOnline = false;
+
+  function getServerUrl() { return getS("server_url", DEFAULT_SERVER); }
+
+  function checkServerHealth() {
+    const url = getServerUrl() + "/api/health";
+    if (typeof GM_xmlhttpRequest === "function") {
+      GM_xmlhttpRequest({
+        method: "GET", url: url, timeout: 5000,
+        onload: function (r) { serverOnline = r.status < 300; updateFabBadge(); },
+        onerror: function () { serverOnline = false; updateFabBadge(); },
+        ontimeout: function () { serverOnline = false; updateFabBadge(); }
+      });
+    } else {
+      fetch(url, { signal: AbortSignal.timeout(5000) })
+        .then(function (r) { serverOnline = r.ok; updateFabBadge(); })
+        .catch(function () { serverOnline = false; updateFabBadge(); });
+    }
+  }
+
+  function updateFabBadge() {
+    if (!fabBtn) return;
+    let dot = fabBtn.querySelector(".cev-health-dot");
+    if (!dot) {
+      dot = document.createElement("span");
+      dot.className = "cev-health-dot";
+      dot.setAttribute("style", "position:absolute !important; bottom:-2px !important; right:-2px !important; width:10px !important; height:10px !important; border-radius:50% !important; border:2px solid #0f0f1a !important;");
+      fabBtn.appendChild(dot);
+    }
+    dot.style.background = serverOnline ? "#22c55e" : "#ef4444";
+    dot.style.boxShadow = serverOnline ? "0 0 6px #22c55e" : "0 0 6px #ef4444";
+  }
+
+  // ── Analytics ──────────────────────────────────────────────────────────────
+  function logAnalytics(type, data) {
+    const url = getServerUrl() + "/api/analytics/" + type;
+    const body = JSON.stringify(data);
+    if (typeof GM_xmlhttpRequest === "function") {
+      GM_xmlhttpRequest({
+        method: "POST", url: url, headers: { "Content-Type": "application/json" }, data: body,
+        onload: function () {}, onerror: function () {}
+      });
+    } else {
+      fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: body }).catch(function () {});
+    }
+  }
+
+  function trackIngest(posts) {
+    posts.forEach(function (p) {
+      logAnalytics("interaction", { query: "ingest:" + (p.author || "unknown"), post_id: p.id, action: "ingest", dwell_ms: 0 });
+    });
+  }
 
   // ── Settings ──────────────────────────────────────────────────────────────
   function getS(k, d) { try { const v = localStorage.getItem("cev_" + k); return v === null ? d : JSON.parse(v); } catch { return d; } }
@@ -395,6 +450,10 @@ ${(data.text || "").slice(0, 4000)}`;
     document.addEventListener("keydown", e => {
       if (e.ctrlKey && e.shiftKey && e.key === "E") { e.preventDefault(); toggle(); }
     });
+
+    // Health check on load + periodic
+    checkServerHealth();
+    setInterval(checkServerHealth, 60000);
   }
 
   // ── Iframe Management ─────────────────────────────────────────────────────
@@ -635,23 +694,32 @@ html,body{background:#0f0f1a;color:#e2e2f0;font:14px/1.5 -apple-system,BlinkMacS
     const html = buildHtml(
       '<div class="hdr"><div class="hdr-left"><div class="hdr-icon">CE</div><div><div class="hdr-title">Settings</div><div class="hdr-sub">Configure export + AI</div></div></div><div class="hdr-right"><button data-action="back">Back</button><button data-action="close">X</button></div></div>' +
       '<div class="body">' +
+      '<div class="field"><label>Server URL</label><input id="s-server" value="' + esc(getS("server_url", DEFAULT_SERVER)) + '"/><div class="hint">Base URL of your Expertise Vault server (e.g. http://localhost:8645)</div></div>' +
       '<div class="field"><label>Ingest API Endpoint</label><input id="s-api" value="' + esc(getS("api_url", DEFAULT_INGEST_API)) + '"/><div class="hint">POST endpoint for ingesting scraped data</div></div>' +
       '<div class="field"><label>Anthropic API Key</label><input id="s-aikey" type="password" value="' + esc(getS("anthropic_key", "")) + '"/><div class="hint">For AI refinement (claude-haiku-4-5, ~$0.001/refine). Leave blank to disable.</div></div>' +
       '<div class="field"><label>Default Author Override</label><input id="s-author" value="' + esc(getS("default_author", "")) + '"/><div class="hint">Overrides extracted author on every export</div></div>' +
       '<div class="field"><label>Extra Tags</label><input id="s-tags" value="' + esc(getS("extra_tags", "")) + '"/><div class="hint">Comma-separated, always appended to every export</div></div>' +
+      '<div style="padding:8px 0;font-size:11px;color:#888aaa;text-align:center">Server: ' + (serverOnline ? '<span style="color:#22c55e">Online</span>' : '<span style="color:#ef4444">Offline</span>') + ' | v4.0.0</div>' +
       '</div>' +
-      '<div class="ftr"><button class="btn pri" data-action="save">Save Settings</button></div>'
+      '<div class="ftr"><button class="btn sec" data-action="test">Test Connection</button><button class="btn pri" data-action="save">Save Settings</button></div>'
     );
 
     writeIframe(html, 420, function (doc) {
       bindActions(doc, {
         close: function () { hide(); },
         back: function () { show(); },
+        test: function () {
+          showToast("Testing connection...", "ok");
+          checkServerHealth();
+          setTimeout(function () { showToast(serverOnline ? "Server online" : "Server offline", serverOnline ? "ok" : "err"); }, 1500);
+        },
         save: function (d) {
+          setS("server_url", readField(d, "s-server").replace(/\/+$/, ""));
           setS("api_url", readField(d, "s-api"));
           setS("anthropic_key", readField(d, "s-aikey"));
           setS("default_author", readField(d, "s-author"));
           setS("extra_tags", readField(d, "s-tags"));
+          checkServerHealth();
           showToast("Settings saved", "ok");
           setTimeout(function () { show(); }, 600);
         },
@@ -697,11 +765,36 @@ html,body{background:#0f0f1a;color:#e2e2f0;font:14px/1.5 -apple-system,BlinkMacS
           clipCopy(lines.join("\n"));
           showToast(sel.length + " posts copied", "ok");
         },
-        bsend: function () {
+        bsend: function (d) {
           const sel = getSelected();
           if (!sel.length) { showToast("No posts selected", "err"); return; }
-          const cleaned = sel.map(function (d) { const o = Object.assign({}, d); delete o._conf; return o; });
-          apiSend(cleaned);
+          // Show progress bar
+          let prog = d.querySelector(".cev-batch-progress");
+          if (!prog) {
+            prog = d.createElement("div");
+            prog.className = "cev-batch-progress";
+            prog.setAttribute("style", "margin:8px 20px;height:4px;border-radius:2px;background:#1e1e3a;overflow:hidden;");
+            prog.innerHTML = '<div style="height:100%;width:0%;background:linear-gradient(90deg,#7c3aed,#a78bfa);border-radius:2px;transition:width 0.3s;"></div>';
+            const ftr = d.querySelector(".ftr");
+            if (ftr) ftr.parentNode.insertBefore(prog, ftr);
+          }
+          const bar = prog.querySelector("div");
+          const total = sel.length;
+          const BATCH = 5;
+          let sent = 0;
+          function sendBatch(start) {
+            const batch = sel.slice(start, start + BATCH).map(function (dd) { const o = Object.assign({}, dd); delete o._conf; return o; });
+            if (!batch.length) {
+              bar.style.width = "100%";
+              showToast("All " + total + " posts sent", "ok");
+              return;
+            }
+            apiSend(batch);
+            sent += batch.length;
+            bar.style.width = Math.round(sent / total * 100) + "%";
+            if (sent < total) setTimeout(function () { sendBatch(start + BATCH); }, 300);
+          }
+          sendBatch(0);
         },
       });
     });
@@ -792,17 +885,27 @@ html,body{background:#0f0f1a;color:#e2e2f0;font:14px/1.5 -apple-system,BlinkMacS
   }
 
   function apiSend(posts) {
-    const url = getS("api_url", DEFAULT_INGEST_API);
+    const url = getS("api_url", getServerUrl() + "/api/ingest");
     const body = JSON.stringify({ posts: posts });
     if (typeof GM_xmlhttpRequest === "function") {
       GM_xmlhttpRequest({
         method: "POST", url: url, headers: { "Content-Type": "application/json" }, data: body,
-        onload: function (r) { r.status < 300 ? showToast("Sent " + posts.length + " post(s) to API", "ok") : showToast("API error: " + r.status, "err"); },
+        onload: function (r) {
+          if (r.status < 300) {
+            showToast("Sent " + posts.length + " post(s) to API", "ok");
+            trackIngest(posts);
+          } else {
+            showToast("API error: " + r.status, "err");
+          }
+        },
         onerror: function () { showToast("Connection failed — is server running?", "err"); }
       });
     } else {
       fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: body })
-        .then(function (r) { return r.ok ? showToast("Sent " + posts.length + " post(s)", "ok") : showToast("Error: " + r.status, "err"); })
+        .then(function (r) {
+          if (r.ok) { showToast("Sent " + posts.length + " post(s)", "ok"); trackIngest(posts); }
+          else showToast("Error: " + r.status, "err");
+        })
         .catch(function () { showToast("Connection failed", "err"); });
     }
   }

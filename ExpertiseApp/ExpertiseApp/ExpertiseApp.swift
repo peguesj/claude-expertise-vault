@@ -5,12 +5,18 @@ import AppKit
 struct ExpertiseApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
+    /// Lifted to App level so the menubar label can observe connectivity & badge state.
+    @StateObject private var viewModel = SearchViewModel()
+
     var body: some Scene {
         MenuBarExtra {
-            SearchView()
+            SearchView(viewModel: viewModel)
                 .frame(width: 500, height: 660)
         } label: {
-            Label("CE", systemImage: "brain.head.profile")
+            MenuBarLabel(
+                serverOnline: viewModel.serverOnline,
+                insightsBadge: viewModel.newInsightsCount
+            )
         }
         .menuBarExtraStyle(.window)
     }

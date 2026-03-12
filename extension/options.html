@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Expertise Vault Options</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <img src="icons/icon-48.png" alt="" class="logo-icon">
+      <h1>Expertise Vault Settings</h1>
+    </header>
+
+    <section class="section">
+      <label class="label" for="server-url">Server URL</label>
+      <p class="description">The base URL of your Expertise Vault API server.</p>
+      <div class="input-row">
+        <input type="url" id="server-url" class="input" placeholder="http://localhost:8645">
+        <button id="test-btn" class="btn btn-secondary">Test</button>
+      </div>
+      <div id="test-result" class="test-result hidden"></div>
+    </section>
+
+    <section class="section">
+      <button id="save-btn" class="btn btn-primary">Save Settings</button>
+      <span id="save-status" class="save-status hidden">Saved</span>
+    </section>
+
+    <section class="section info">
+      <h2>About</h2>
+      <p>Claude Expertise Vault v4.0.0</p>
+      <p>Search and query expert knowledge about Claude Code, agent workflows, and AI-powered development.</p>
+    </section>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>
