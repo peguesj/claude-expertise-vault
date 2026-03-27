@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claude Expertise Vault</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="logo-row">
+        <img src="icons/icon-48.png" alt="" class="logo-icon">
+        <h1>Expertise Vault</h1>
+        <span id="status-dot" class="status-dot offline" title="Checking server..."></span>
+      </div>
+    </header>
+
+    <div class="mode-toggle">
+      <button id="btn-search" class="toggle-btn active" data-mode="search">Search</button>
+      <button id="btn-ask" class="toggle-btn" data-mode="ask">Ask</button>
+    </div>
+
+    <div class="input-area">
+      <textarea id="query-input" placeholder="Search the expertise vault..." rows="2"></textarea>
+      <button id="submit-btn" class="submit-btn">
+        <span id="submit-text">Search</span>
+        <span id="submit-spinner" class="spinner hidden"></span>
+      </button>
+    </div>
+
+    <div id="results-area" class="results-area">
+      <div class="empty-state">
+        <p>Enter a query to search expert knowledge</p>
+      </div>
+    </div>
+
+    <footer class="footer">
+      <div id="stats-bar" class="stats-bar">
+        <span id="stat-posts">--</span> posts
+        <span class="sep">|</span>
+        <span id="stat-chunks">--</span> chunks
+        <span class="sep">|</span>
+        <span id="stat-experts">--</span> experts
+      </div>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

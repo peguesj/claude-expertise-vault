@@ -58,11 +58,12 @@ def build_index():
     # Save metadata
     metadata = []
     for c in chunks:
-        metadata.append({
+        entry = {
             "chunk_id": c["chunk_id"],
             "post_id": c["post_id"],
             "author": c["author"],
             "platform": c["platform"],
+            "url": c.get("url", ""),
             "time_relative": c.get("time_relative", ""),
             "likes": c.get("likes", 0),
             "comments": c.get("comments", 0),
@@ -70,7 +71,10 @@ def build_index():
             "chunk_index": c.get("chunk_index", 0),
             "total_chunks": c.get("total_chunks", 1),
             "text": c["text"],
-        })
+        }
+        if c.get("images"):
+            entry["images"] = c["images"]
+        metadata.append(entry)
 
     meta_path = VECTOR_DIR / "metadata.json"
     with open(meta_path, "w") as f:

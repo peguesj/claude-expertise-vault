@@ -17,6 +17,20 @@ from datetime import datetime
 BASE_DIR = Path(__file__).resolve().parent.parent
 RAW_DIR = BASE_DIR / "data" / "raw"
 PROCESSED_DIR = BASE_DIR / "data" / "processed"
+IMAGES_DIR = BASE_DIR / "data" / "images"
+
+
+def _get_image_paths(post_id: str, author: str) -> list[str]:
+    """Look up local image paths for a post from the media mapping."""
+    mapping_path = IMAGES_DIR / author / "media_mapping.json"
+    if not mapping_path.exists():
+        return []
+    try:
+        with open(mapping_path, "r") as f:
+            mapping = json.load(f)
+        return mapping.get(post_id, [])
+    except (json.JSONDecodeError, OSError):
+        return []
 
 # Approximate token count: ~4 chars per token for English
 CHAR_LIMIT = 2000  # ~500 tokens
@@ -97,12 +111,16 @@ def ingest(author: str):
 
             chunks = split_into_chunks(text)
 
+            # Collect image paths from media mapping if available
+            images = _get_image_paths(post.get("id", ""), author)
+
             for ci, chunk in enumerate(chunks):
                 record = {
                     "chunk_id": f"{post['id']}_c{ci}",
                     "post_id": post["id"],
                     "author": post.get("author", ""),
                     "platform": post.get("platform", ""),
+                    "url": post.get("url", ""),
                     "time_relative": post.get("time_relative", ""),
                     "scraped_date": post.get("scraped_date", ""),
                     "likes": post.get("likes", 0),
@@ -112,6 +130,8 @@ def ingest(author: str):
                     "total_chunks": len(chunks),
                     "text": chunk,
                 }
+                if images:
+                    record["images"] = images
                 fout.write(json.dumps(record) + "\n")
                 total_chunks += 1
 

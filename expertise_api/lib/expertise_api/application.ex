@@ -11,8 +11,8 @@ defmodule ExpertiseApi.Application do
       ExpertiseApiWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:expertise_api, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: ExpertiseApi.PubSub},
-      # Start a worker by calling: ExpertiseApi.Worker.start_link(arg)
-      # {ExpertiseApi.Worker, arg},
+      # Authority syncer — periodic background fetch from tracked expert sources
+      ExpertiseApi.AuthoritySyncer,
       # Start to serve requests, typically the last entry
       ExpertiseApiWeb.Endpoint
     ]

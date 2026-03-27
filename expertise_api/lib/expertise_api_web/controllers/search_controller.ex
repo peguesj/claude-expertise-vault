@@ -27,4 +27,109 @@ defmodule ExpertiseApiWeb.SearchController do
   def health(conn, _params) do
     json(conn, %{status: "ok", service: "expertise_api"})
   end
+
+  def scan(conn, params) do
+    author = Map.get(params, "author", "mitko-vasilev")
+
+    case ExpertiseApi.Pipeline.scan(author) do
+      {:ok, result} ->
+        json(conn, %{status: "ok", action: "scan", result: result})
+
+      {:error, reason} ->
+        conn
+        |> put_status(500)
+        |> json(%{error: to_string(reason)})
+    end
+  end
+
+  def import_data(conn, params) do
+    author = Map.get(params, "author", "mitko-vasilev")
+
+    case ExpertiseApi.Pipeline.run_pipeline(author) do
+      {:ok, result} ->
+        json(conn, %{status: "ok", action: "import", result: result})
+
+      {:error, reason} ->
+        conn
+        |> put_status(500)
+        |> json(%{error: to_string(reason)})
+    end
+  end
+
+  def scrape_images(conn, params) do
+    author = Map.get(params, "author", "mitko-vasilev")
+
+    case ExpertiseApi.Pipeline.scrape_images(author) do
+      {:ok, result} ->
+        json(conn, %{status: "ok", action: "scrape_images", result: result})
+
+      {:error, reason} ->
+        conn
+        |> put_status(500)
+        |> json(%{error: to_string(reason)})
+    end
+  end
+
+  def stats(conn, _params) do
+    {:ok, result} = ExpertiseApi.Pipeline.stats()
+    json(conn, result)
+  end
+
+  def ingest(conn, %{"posts" => posts}) when is_list(posts) do
+    case ExpertiseApi.Ingest.ingest_posts(posts) do
+      {:ok, result} ->
+        json(conn, %{status: "ok", action: "ingest", ingested: result})
+
+      {:error, reason} ->
+        conn
+        |> put_status(422)
+        |> json(%{error: to_string(reason)})
+    end
+  end
+
+  def ingest(conn, post) when is_map(post) do
+    ingest(conn, %{"posts" => [post]})
+  end
+
+  def ask(conn, %{"q" => question} = params) do
+    top_k = params |> Map.get("top_k", "8") |> to_string() |> String.to_integer()
+    no_ai = params |> Map.get("no_ai", "false") |> to_string()
+
+    case ExpertiseApi.Ask.ask(question, top_k: top_k, no_ai: no_ai == "true") do
+      {:ok, result} -> json(conn, result)
+      {:error, reason} ->
+        conn
+        |> put_status(500)
+        |> json(%{error: to_string(reason)})
+    end
+  end
+
+  def ask(conn, _params) do
+    conn
+    |> put_status(400)
+    |> json(%{error: "Missing required parameter: q"})
+  end
+
+  def taxonomy(conn, _params) do
+    case ExpertiseApi.Database.taxonomy() do
+      {:ok, result} -> json(conn, result)
+      {:error, reason} ->
+        conn
+        |> put_status(500)
+        |> json(%{error: to_string(reason)})
+    end
+  end
+
+  def resources(conn, params) do
+    type = Map.get(params, "type")
+    tag = Map.get(params, "tag")
+
+    case ExpertiseApi.Database.resources(type: type, tag: tag) do
+      {:ok, result} -> json(conn, %{resources: result, count: length(result)})
+      {:error, reason} ->
+        conn
+        |> put_status(500)
+        |> json(%{error: to_string(reason)})
+    end
+  end
 end
