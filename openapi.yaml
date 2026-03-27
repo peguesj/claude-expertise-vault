@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Claude Expertise Vault API
-  version: "3.0.0"
+  version: "4.1.0"
   description: |
     Knowledge base API for Claude Code expert practices. Provides semantic
     vector search, AI-powered Q&A grounded in real practitioner knowledge,

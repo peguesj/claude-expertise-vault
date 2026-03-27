@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Claude Expertise Vault",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "description": "Search and query the Claude Expertise Vault knowledge base. Semantic vector search, AI-powered Q&A, and content ingestion.",
   "permissions": [
     "activeTab",

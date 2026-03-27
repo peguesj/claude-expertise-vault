@@ -1,6 +1,6 @@
 {
   "formationId": "fmt-cev-003",
-  "projectName": "Claude Expertise Vault v3",
+  "projectName": "Claude Expertise Vault",
   "projectKey": "CEV",
   "description": "Major UX overhaul: liquid glass SwiftUI, personalized start page with learned insights, search analytics, updated chrome extension + userscript, OpenAPI/Scalar developer docs",
   "repoUrl": "https://github.com/peguesj/claude-expertise-vault",

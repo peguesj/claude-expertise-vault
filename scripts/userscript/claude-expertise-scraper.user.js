@@ -17,6 +17,7 @@
 (function () {
   "use strict";
 
+  const APP_VERSION = "4.1.0";
   const DEFAULT_SERVER = "http://localhost:8645";
   const DEFAULT_INGEST_API = DEFAULT_SERVER + "/api/ingest";
   const ANTHROPIC_API = "https://api.anthropic.com/v1/messages";
@@ -879,7 +880,7 @@ ${(data.text || "").slice(0, 4000)}`;
       '<div class="field"><label>Anthropic API Key</label><input id="s-aikey" type="password" value="' + esc(getS("anthropic_key", "")) + '"/><div class="hint">For AI refinement (claude-haiku-4-5, ~$0.001/refine). Leave blank to disable.</div></div>' +
       '<div class="field"><label>Default Author Override</label><input id="s-author" value="' + esc(getS("default_author", "")) + '"/><div class="hint">Overrides extracted author on every export</div></div>' +
       '<div class="field"><label>Extra Tags</label><input id="s-tags" value="' + esc(getS("extra_tags", "")) + '"/><div class="hint">Comma-separated, always appended to every export</div></div>' +
-      '<div style="padding:8px 0;font-size:11px;color:#888aaa;text-align:center">Server: ' + (serverOnline ? '<span style="color:#22c55e">Online</span>' : '<span style="color:#ef4444">Offline</span>') + ' | v4.0.1</div>' +
+      '<div style="padding:8px 0;font-size:11px;color:#888aaa;text-align:center">Server: ' + (serverOnline ? '<span style="color:#22c55e">Online</span>' : '<span style="color:#ef4444">Offline</span>') + ' | v' + APP_VERSION + '</div>' +
       '</div>' +
       '<div class="ftr"><button class="btn sec" data-action="test">Test Connection</button><button class="btn pri" data-action="save">Save Settings</button></div>'
     );
