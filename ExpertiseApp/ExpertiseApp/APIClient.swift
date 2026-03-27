@@ -188,6 +188,17 @@ actor APIClient {
         }
     }
 
+    func fetchInsightsFeed(limit: Int = 20) async throws -> InsightsFeedResponse {
+        var components = URLComponents(url: baseURL.appendingPathComponent("/api/analytics/insights-feed"), resolvingAgainstBaseURL: false)!
+        components.queryItems = [URLQueryItem(name: "limit", value: String(limit))]
+        guard let url = components.url else { throw APIError.invalidURL }
+        let (data, response) = try await session.data(from: url)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw APIError.serverError
+        }
+        return try JSONDecoder().decode(InsightsFeedResponse.self, from: data)
+    }
+
     func fetchPreferences() async throws -> PreferencesResponse {
         let url = baseURL.appendingPathComponent("/api/analytics/preferences")
         let (data, response) = try await session.data(from: url)
@@ -195,6 +206,54 @@ actor APIClient {
             throw APIError.serverError
         }
         return try JSONDecoder().decode(PreferencesResponse.self, from: data)
+    }
+
+    // MARK: - Authorities
+
+    func fetchAuthorities(status: String? = nil) async throws -> AuthoritiesResponse {
+        var components = URLComponents(url: baseURL.appendingPathComponent("/api/authorities"), resolvingAgainstBaseURL: false)!
+        if let status {
+            components.queryItems = [URLQueryItem(name: "status", value: status)]
+        }
+        guard let url = components.url else { throw APIError.invalidURL }
+        let (data, response) = try await session.data(from: url)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw APIError.serverError
+        }
+        return try JSONDecoder().decode(AuthoritiesResponse.self, from: data)
+    }
+
+    func syncAuthority(slug: String) async throws -> AuthoritySyncResult {
+        let url = baseURL.appendingPathComponent("/api/authorities/\(slug)/sync")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw APIError.serverError
+        }
+        return try JSONDecoder().decode(AuthoritySyncResult.self, from: data)
+    }
+
+    func addAuthority(slug: String, name: String, platform: String, profileUrl: String, fetchUrl: String? = nil, adapter: String? = nil) async throws -> AuthoritySyncResult {
+        let url = baseURL.appendingPathComponent("/api/authorities")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        var body: [String: Any] = ["slug": slug, "name": name, "platform": platform, "profile_url": profileUrl]
+        if let fetchUrl { body["fetch_url"] = fetchUrl }
+        if let adapter { body["adapter"] = adapter }
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 201 else {
+            throw APIError.serverError
+        }
+        return try JSONDecoder().decode(AuthoritySyncResult.self, from: data)
+    }
+
+    func fetchSyncerStatus() async throws -> [String: Any] {
+        let url = baseURL.appendingPathComponent("/api/authorities/syncer/status")
+        let (data, _) = try await session.data(from: url)
+        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
     }
 }
 

@@ -33,6 +33,11 @@ class SearchViewModel: ObservableObject {
     @Published var topQueries: [TopQuery] = []
     @Published var isLoadingStartPage: Bool = false
 
+    // MARK: - Insights feed state
+    @Published var insightsFeed: InsightsFeedResponse? = nil
+    @Published var isLoadingFeed: Bool = false
+    @Published var showFeed: Bool = false
+
     // MARK: - Server / UI state
     @Published var serverOnline: Bool = false
     @Published var stats: StatsResponse? = nil
@@ -44,12 +49,28 @@ class SearchViewModel: ObservableObject {
     @Published var autoVikiSync: Bool = false
     @Published var vikiSyncStatus: String? = nil
 
+    // MARK: - Server management
+    @Published var serverPID: Int32? = nil
+    @Published var serverUptime: TimeInterval = 0
+    @Published var autoRestart: Bool = false
+    @Published var serverAction: String? = nil  // transient status label
+
+    // MARK: - Authorities
+    @Published var authorities: [Authority] = []
+    @Published var isLoadingAuthorities: Bool = false
+    @Published var syncingAuthority: String? = nil
+    @Published var showAuthorities: Bool = false
+    @Published var authorityAction: String? = nil
+
     // MARK: - Tasks
     private var searchTask: Task<Void, Never>?
     private var debounceTask: Task<Void, Never>?
     private var autoScanTimer: Task<Void, Never>?
     private var insightDebounceTask: Task<Void, Never>?
+    private var healthPollTask: Task<Void, Never>?
     private var serverStartAttempted = false
+    private var serverStartedAt: Date? = nil
+    private var managedProcess: Process? = nil
 
     // MARK: - Quick-ask shortcuts
     let quickAskCommands: [(label: String, query: String)] = [
@@ -62,10 +83,12 @@ class SearchViewModel: ObservableObject {
     init() {
         launchAtLogin = UserDefaults.standard.bool(forKey: "launchAtLogin")
         autoVikiSync = UserDefaults.standard.bool(forKey: "autoVikiSync")
+        autoRestart = UserDefaults.standard.bool(forKey: "autoRestart")
         Task {
             await checkServer()
             await refreshStats()
             await refreshStartPage()
+            startHealthPolling()
         }
     }
 
@@ -195,17 +218,92 @@ class SearchViewModel: ObservableObject {
         isLoadingInsights = false
     }
 
-    // MARK: - Server
+    // MARK: - Server lifecycle
 
     func checkServer() async {
+        let wasOnline = serverOnline
         serverOnline = await APIClient.shared.healthCheck()
+
+        if serverOnline {
+            if serverStartedAt == nil { serverStartedAt = Date() }
+            serverUptime = Date().timeIntervalSince(serverStartedAt ?? Date())
+            detectServerPID()
+        } else {
+            serverPID = nil
+            serverUptime = 0
+            serverStartedAt = nil
+        }
+
+        // Auto-start on first launch
         if !serverOnline && !serverStartAttempted {
             serverStartAttempted = true
-            startPhoenixServer()
+            await startServer()
+        }
+
+        // Auto-restart if enabled and server dropped
+        if wasOnline && !serverOnline && autoRestart {
+            serverAction = "Auto-restarting..."
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            await startServer()
         }
     }
 
-    func startPhoenixServer() {
+    func startServer() async {
+        guard !serverOnline else {
+            serverAction = "Already running"
+            clearServerActionAfterDelay()
+            return
+        }
+        serverAction = "Starting server..."
+        launchPhoenixProcess()
+        // Poll until ready (up to 15s)
+        for _ in 0..<15 {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            serverOnline = await APIClient.shared.healthCheck()
+            if serverOnline {
+                serverStartedAt = Date()
+                detectServerPID()
+                serverAction = "Server started"
+                await refreshStats()
+                clearServerActionAfterDelay()
+                return
+            }
+        }
+        serverAction = "Start timed out"
+        clearServerActionAfterDelay()
+    }
+
+    func stopServer() async {
+        serverAction = "Stopping server..."
+        killServerProcess()
+        try? await Task.sleep(nanoseconds: 1_500_000_000)
+        serverOnline = await APIClient.shared.healthCheck()
+        if !serverOnline {
+            serverPID = nil
+            serverUptime = 0
+            serverStartedAt = nil
+            serverAction = "Server stopped"
+        } else {
+            serverAction = "Stop failed"
+        }
+        clearServerActionAfterDelay()
+    }
+
+    func restartServer() async {
+        serverAction = "Restarting..."
+        killServerProcess()
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        await startServer()
+    }
+
+    func setAutoRestart(_ enabled: Bool) {
+        autoRestart = enabled
+        UserDefaults.standard.set(enabled, forKey: "autoRestart")
+    }
+
+    // MARK: - Server internals
+
+    private func launchPhoenixProcess() {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let script = """
         PATH="$HOME/.asdf/shims:$HOME/.mise/shims:/opt/homebrew/bin:/usr/local/bin:$PATH" \
@@ -220,11 +318,61 @@ class SearchViewModel: ObservableObject {
         env["MIX_ENV"] = "dev"
         process.environment = env
         try? process.run()
+        managedProcess = process
+    }
 
+    private func killServerProcess() {
+        // Kill managed process if we have one
+        if let proc = managedProcess, proc.isRunning {
+            proc.terminate()
+            managedProcess = nil
+        }
+        // Also kill anything on port 8645
+        let pipe = Pipe()
+        let lsof = Process()
+        lsof.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        lsof.arguments = ["-ti:8645"]
+        lsof.standardOutput = pipe
+        lsof.standardError = FileHandle.nullDevice
+        try? lsof.run()
+        lsof.waitUntilExit()
+        let pids = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .split(separator: "\n")
+            .compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) } ?? []
+        for pid in pids {
+            kill(pid, SIGTERM)
+        }
+    }
+
+    private func detectServerPID() {
+        let pipe = Pipe()
+        let lsof = Process()
+        lsof.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        lsof.arguments = ["-ti:8645"]
+        lsof.standardOutput = pipe
+        lsof.standardError = FileHandle.nullDevice
+        try? lsof.run()
+        lsof.waitUntilExit()
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        serverPID = output.split(separator: "\n")
+            .compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
+            .first
+    }
+
+    private func startHealthPolling() {
+        healthPollTask?.cancel()
+        healthPollTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 15_000_000_000) // 15s
+                await checkServer()
+            }
+        }
+    }
+
+    private func clearServerActionAfterDelay() {
         Task {
-            try? await Task.sleep(nanoseconds: 8_000_000_000)
-            await checkServer()
-            if serverOnline { await refreshStats() }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if serverAction != nil { serverAction = nil }
         }
     }
 
@@ -342,6 +490,76 @@ class SearchViewModel: ObservableObject {
         recommendations = (await recs)?.recommendations ?? []
         topQueries = (await queries)?.queries ?? []
         isLoadingStartPage = false
+    }
+
+    // MARK: - Insights feed
+
+    func refreshInsightsFeed() async {
+        isLoadingFeed = true
+        do {
+            insightsFeed = try await APIClient.shared.fetchInsightsFeed()
+        } catch {
+            insightsFeed = nil
+        }
+        isLoadingFeed = false
+    }
+
+    func toggleFeed() {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+            showFeed.toggle()
+        }
+        if showFeed {
+            Task { await refreshInsightsFeed() }
+        }
+    }
+
+    // MARK: - Authorities
+
+    func toggleAuthorities() {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+            showAuthorities.toggle()
+            if showAuthorities { showFeed = false }
+        }
+        if showAuthorities {
+            Task { await loadAuthorities() }
+        }
+    }
+
+    func loadAuthorities() async {
+        isLoadingAuthorities = true
+        do {
+            let response = try await APIClient.shared.fetchAuthorities()
+            authorities = response.authorities
+        } catch {
+            authorities = []
+        }
+        isLoadingAuthorities = false
+    }
+
+    func syncAuthority(_ slug: String) {
+        guard syncingAuthority == nil else { return }
+        syncingAuthority = slug
+        authorityAction = "Syncing \(slug)…"
+        Task {
+            do {
+                let result = try await APIClient.shared.syncAuthority(slug: slug)
+                let newCount = result.newPosts ?? 0
+                authorityAction = newCount > 0 ? "\(slug): \(newCount) new posts" : "\(slug): up to date"
+                if newCount > 0 { await refreshStats() }
+                await loadAuthorities()
+            } catch {
+                authorityAction = "\(slug): sync failed"
+            }
+            syncingAuthority = nil
+            clearAuthorityActionAfterDelay()
+        }
+    }
+
+    private func clearAuthorityActionAfterDelay() {
+        Task {
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            if authorityAction != nil { authorityAction = nil }
+        }
     }
 
     // MARK: - Interaction tracking

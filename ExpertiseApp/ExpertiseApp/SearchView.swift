@@ -19,6 +19,10 @@ struct SearchView: View {
             Divider().padding(.top, 4)
             if viewModel.showingStats {
                 statsPanel
+            } else if viewModel.showAuthorities {
+                authoritiesView
+            } else if viewModel.showFeed {
+                insightsFeedView
             } else if viewModel.mode == .ask {
                 askResultView
             } else {
@@ -100,6 +104,24 @@ struct SearchView: View {
                 .help("Toggle hourly auto-scan")
 
                 Spacer()
+
+                // Authorities toggle
+                Button(action: { viewModel.toggleAuthorities() }) {
+                    Image(systemName: viewModel.showAuthorities ? "person.2.fill" : "person.2")
+                        .font(.system(size: 11))
+                        .foregroundColor(viewModel.showAuthorities ? .blue : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Authority sources ⌘⇧A")
+
+                // Insights feed toggle
+                Button(action: { viewModel.toggleFeed() }) {
+                    Image(systemName: viewModel.showFeed ? "newspaper.fill" : "newspaper")
+                        .font(.system(size: 11))
+                        .foregroundColor(viewModel.showFeed ? .orange : .secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Insights feed ⌘⇧F")
 
                 // Stats toggle
                 Button(action: {
@@ -231,6 +253,79 @@ struct SearchView: View {
 
                 Divider()
 
+                // Server management
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Server").font(.system(size: 13, weight: .semibold))
+
+                    HStack(spacing: 8) {
+                        Circle()
+                            .fill(viewModel.serverOnline ? Color.green : Color.red)
+                            .frame(width: 8, height: 8)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(viewModel.serverOnline ? "Online" : "Offline")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(viewModel.serverOnline ? .green : .red)
+                            if viewModel.serverOnline {
+                                Text("PID \(viewModel.serverPID.map(String.init) ?? "?") \u{2022} uptime \(formatUptime(viewModel.serverUptime))")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        Spacer()
+                    }
+
+                    if let action = viewModel.serverAction {
+                        HStack(spacing: 4) {
+                            ProgressView().controlSize(.mini)
+                            Text(action)
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    HStack(spacing: 6) {
+                        Button(action: { Task { await viewModel.startServer() } }) {
+                            Label("Start", systemImage: "play.fill")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(viewModel.serverOnline)
+
+                        Button(action: { Task { await viewModel.stopServer() } }) {
+                            Label("Stop", systemImage: "stop.fill")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(!viewModel.serverOnline)
+
+                        Button(action: { Task { await viewModel.restartServer() } }) {
+                            Label("Restart", systemImage: "arrow.clockwise")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
+
+                    Toggle(isOn: Binding(
+                        get: { viewModel.autoRestart },
+                        set: { viewModel.setAutoRestart($0) }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Auto-restart")
+                                .font(.system(size: 12))
+                            Text("Restart server if it goes down")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                }
+
+                Divider()
+
                 // Launch at login
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Startup").font(.system(size: 13, weight: .semibold))
@@ -289,6 +384,7 @@ struct SearchView: View {
                     ShortcutRow(keys: "⌘I", action: "Import")
                     ShortcutRow(keys: "⌘⇧I", action: "Download images")
                     ShortcutRow(keys: "⌘,", action: "Toggle stats")
+                    ShortcutRow(keys: "⌘⇧F", action: "Insights feed")
                     ShortcutRow(keys: "⌘⇧A", action: "Toggle AI Insights")
                     ShortcutRow(keys: "⌘⇧E", action: "Activate from anywhere*")
                     Text("* Requires Accessibility access")
@@ -427,10 +523,318 @@ struct SearchView: View {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) { viewModel.showInsights.toggle() }
             }
             .keyboardShortcut("a", modifiers: [.command, .shift])
+
+            Button("") { viewModel.toggleFeed() }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+
+            Button("") { viewModel.toggleAuthorities() }
+                .keyboardShortcut("u", modifiers: [.command, .shift])
         }
         .frame(width: 0, height: 0)
         .opacity(0)
         .allowsHitTesting(false)
+    }
+
+    // MARK: - Authorities View
+
+    @ViewBuilder
+    private var authoritiesView: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Authority Sources")
+                    .font(.headline)
+                Spacer()
+                if let msg = viewModel.authorityAction {
+                    Text(msg)
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                Button(action: { Task { await viewModel.loadAuthorities() } }) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .buttonStyle(.plain)
+                .disabled(viewModel.isLoadingAuthorities)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 8)
+
+            Divider()
+
+            if viewModel.isLoadingAuthorities && viewModel.authorities.isEmpty {
+                VStack(spacing: 8) {
+                    ProgressView()
+                    Text("Loading authorities…")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxHeight: .infinity)
+            } else if viewModel.authorities.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "person.2.slash")
+                        .font(.title2)
+                        .foregroundColor(.secondary)
+                    Text("No authorities registered")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(viewModel.authorities) { authority in
+                            AuthorityRowView(
+                                authority: authority,
+                                isSyncing: viewModel.syncingAuthority == authority.slug
+                            ) {
+                                viewModel.syncAuthority(authority.slug)
+                            }
+                            Divider().padding(.leading, 44)
+                        }
+                    }
+                    .padding(.bottom, 8)
+                }
+            }
+        }
+    }
+
+    // MARK: - Insights Feed View
+
+    @ViewBuilder
+    private var insightsFeedView: some View {
+        if viewModel.isLoadingFeed && viewModel.insightsFeed == nil {
+            VStack(spacing: 12) {
+                ProgressView()
+                Text("Loading insights...")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+            .frame(maxHeight: .infinity)
+        } else if let feed = viewModel.insightsFeed {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+
+                    // Trending topics
+                    if !feed.trendingTopics.isEmpty {
+                        FeedSection(title: "Trending Topics", icon: "flame.fill", tint: .orange) {
+                            FlowLayout(spacing: 6) {
+                                ForEach(feed.trendingTopics) { topic in
+                                    HStack(spacing: 4) {
+                                        Text(topic.tag)
+                                            .font(.system(size: 11, weight: .medium))
+                                        Text("\(topic.postCount)")
+                                            .font(.system(size: 9, weight: .bold))
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 5)
+                                    .background(Color.orange.opacity(0.1))
+                                    .clipShape(Capsule())
+                                    .overlay(Capsule().stroke(Color.orange.opacity(0.2), lineWidth: 0.5))
+                                }
+                            }
+                        }
+                    }
+
+                    // High-engagement highlights
+                    if !feed.highlights.isEmpty {
+                        FeedSection(title: "Top Posts", icon: "star.fill", tint: .yellow) {
+                            ForEach(feed.highlights) { item in
+                                HighlightCard(item: item) {
+                                    if let url = item.url, let link = URL(string: url) {
+                                        NSWorkspace.shared.open(link)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Recent submissions
+                    if !feed.feed.isEmpty {
+                        FeedSection(title: "Recent Submissions", icon: "tray.and.arrow.down.fill", tint: .blue) {
+                            ForEach(feed.feed.prefix(8)) { item in
+                                FeedItemCard(item: item) {
+                                    if let url = item.url, let link = URL(string: url) {
+                                        NSWorkspace.shared.open(link)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Resources discovered
+                    if feed.resources.total > 0 {
+                        FeedSection(title: "Resources Discovered", icon: "link.circle.fill", tint: .green) {
+                            HStack(spacing: 8) {
+                                ForEach(feed.resources.byType.prefix(5)) { res in
+                                    VStack(spacing: 2) {
+                                        Text("\(res.count)")
+                                            .font(.system(size: 16, weight: .bold))
+                                        Text(res.type)
+                                            .font(.system(size: 9))
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                                    .background(.regularMaterial)
+                                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                                }
+                            }
+                        }
+                    }
+
+                    // Author breakdown
+                    if !feed.authors.isEmpty {
+                        FeedSection(title: "Contributors", icon: "person.2.fill", tint: .purple) {
+                            ForEach(feed.authors) { author in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(author.author)
+                                            .font(.system(size: 12, weight: .medium))
+                                        Text("\(author.posts) posts")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.secondary)
+                                    }
+                                    Spacer()
+                                    HStack(spacing: 8) {
+                                        Label("\(author.totalLikes)", systemImage: "heart.fill")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.pink)
+                                        Label("\(author.totalComments)", systemImage: "bubble.left.fill")
+                                            .font(.system(size: 10))
+                                            .foregroundColor(.blue)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding()
+            }
+        } else {
+            VStack(spacing: 8) {
+                Image(systemName: "newspaper")
+                    .font(.largeTitle)
+                    .foregroundColor(.orange.opacity(0.5))
+                Text("No insights available")
+                    .foregroundColor(.secondary)
+                Text("Ingest posts to generate insights")
+                    .font(.caption)
+                    .foregroundColor(.secondary.opacity(0.7))
+            }
+            .frame(maxHeight: .infinity)
+        }
+    }
+}
+
+// MARK: - Feed Section + Cards
+
+struct FeedSection<Content: View>: View {
+    let title: String
+    let icon: String
+    let tint: Color
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(title, systemImage: icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(tint)
+            content()
+        }
+    }
+}
+
+struct HighlightCard: View {
+    let item: HighlightItem
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(item.author)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.purple)
+                    Spacer()
+                    HStack(spacing: 6) {
+                        Label("\(item.likes)", systemImage: "heart.fill")
+                            .font(.system(size: 9))
+                            .foregroundColor(.pink)
+                        Label("\(item.comments)", systemImage: "bubble.left.fill")
+                            .font(.system(size: 9))
+                            .foregroundColor(.blue)
+                    }
+                }
+                Text(item.excerpt)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+            }
+            .padding(10)
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.yellow.opacity(0.15), lineWidth: 0.5)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct FeedItemCard: View {
+    let item: FeedItem
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(item.author)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.purple)
+                    Text(item.platform)
+                        .font(.system(size: 9))
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 1)
+                        .background(Color.secondary.opacity(0.15))
+                        .clipShape(Capsule())
+                    Spacer()
+                    HStack(spacing: 4) {
+                        Label("\(item.likes)", systemImage: "heart")
+                            .font(.system(size: 9))
+                        Label("\(item.comments)", systemImage: "bubble.left")
+                            .font(.system(size: 9))
+                    }
+                    .foregroundColor(.secondary)
+                }
+                Text(item.excerpt)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                if !item.tags.isEmpty {
+                    HStack(spacing: 4) {
+                        ForEach(item.tags.prefix(3), id: \.self) { tag in
+                            Text(tag)
+                                .font(.system(size: 9))
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 2)
+                                .background(Color.blue.opacity(0.1))
+                                .clipShape(Capsule())
+                        }
+                    }
+                }
+            }
+            .padding(8)
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -725,6 +1129,15 @@ struct MenuButton: View {
         .disabled(isLoading)
         .opacity(isLoading ? 0.5 : 1.0)
     }
+}
+
+private func formatUptime(_ interval: TimeInterval) -> String {
+    let total = Int(interval)
+    if total < 60 { return "\(total)s" }
+    let h = total / 3600
+    let m = (total % 3600) / 60
+    if h > 0 { return "\(h)h \(m)m" }
+    return "\(m)m"
 }
 
 struct StatRow: View {
@@ -1023,5 +1436,109 @@ struct ResultCard: View {
                 )
         )
         .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
+    }
+}
+
+// MARK: - AuthorityRowView
+
+struct AuthorityRowView: View {
+    let authority: Authority
+    let isSyncing: Bool
+    let onSync: () -> Void
+
+    private var statusColor: Color {
+        switch authority.status {
+        case "active": return .green
+        case "browser-only": return .orange
+        case "paused": return .gray
+        case "error": return .red
+        default: return .secondary
+        }
+    }
+
+    private var platformIcon: String {
+        switch authority.platform {
+        case "github": return "chevron.left.forwardslash.chevron.right"
+        case "linkedin": return "person.crop.square.fill"
+        case "rss", "blog": return "dot.radiowaves.up.forward"
+        case "youtube": return "play.rectangle.fill"
+        case "x": return "at"
+        default: return "globe"
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ZStack {
+                Circle()
+                    .fill(statusColor.opacity(0.15))
+                    .frame(width: 32, height: 32)
+                Image(systemName: platformIcon)
+                    .font(.system(size: 13))
+                    .foregroundColor(statusColor)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(authority.name)
+                        .font(.system(size: 12, weight: .medium))
+                    Text(authority.status)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundColor(statusColor)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(statusColor.opacity(0.12))
+                        .clipShape(Capsule())
+                }
+
+                HStack(spacing: 8) {
+                    Text("\(authority.postCount) posts")
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+
+                    if authority.newSinceLastSync > 0 {
+                        Text("+\(authority.newSinceLastSync) new")
+                            .font(.caption2)
+                            .foregroundColor(.green)
+                    }
+
+                    if let last = authority.lastSyncedAt {
+                        Text("synced \(last.prefix(10))")
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                if !authority.expertiseTags.isEmpty {
+                    Text(authority.expertiseTags.prefix(3).joined(separator: " · "))
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+
+            if isSyncing {
+                ProgressView()
+                    .scaleEffect(0.7)
+            } else if authority.status == "browser-only" {
+                Image(systemName: "safari")
+                    .font(.system(size: 11))
+                    .foregroundColor(.orange)
+                    .help("Sync via Tampermonkey userscript")
+            } else {
+                Button(action: onSync) {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11))
+                        .foregroundColor(.blue)
+                }
+                .buttonStyle(.plain)
+                .help("Sync now")
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
     }
 }

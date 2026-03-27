@@ -123,6 +123,73 @@ struct RelatedResource: Codable, Identifiable {
     let type: String?
 }
 
+// MARK: - Authority models
+
+struct Authority: Codable, Identifiable {
+    var id: String { slug }
+    let slug: String
+    let name: String
+    let platform: String
+    let profileUrl: String
+    let fetchUrl: String?
+    let status: String
+    let lastSyncedAt: String?
+    let nextSyncAt: String?
+    let postCount: Int
+    let newSinceLastSync: Int
+    let credibilityScore: Double
+    let expertiseTags: [String]
+    let errorMessage: String?
+
+    enum CodingKeys: String, CodingKey {
+        case slug, name, platform, status
+        case profileUrl = "profile_url"
+        case fetchUrl = "fetch_url"
+        case lastSyncedAt = "last_synced_at"
+        case nextSyncAt = "next_sync_at"
+        case postCount = "post_count"
+        case newSinceLastSync = "new_since_last_sync"
+        case credibilityScore = "credibility_score"
+        case expertiseTags = "expertise_tags"
+        case errorMessage = "error_message"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        slug = try c.decode(String.self, forKey: .slug)
+        name = try c.decode(String.self, forKey: .name)
+        platform = try c.decode(String.self, forKey: .platform)
+        profileUrl = try c.decode(String.self, forKey: .profileUrl)
+        fetchUrl = try? c.decode(String.self, forKey: .fetchUrl)
+        status = (try? c.decode(String.self, forKey: .status)) ?? "active"
+        lastSyncedAt = try? c.decode(String.self, forKey: .lastSyncedAt)
+        nextSyncAt = try? c.decode(String.self, forKey: .nextSyncAt)
+        postCount = (try? c.decode(Int.self, forKey: .postCount)) ?? 0
+        newSinceLastSync = (try? c.decode(Int.self, forKey: .newSinceLastSync)) ?? 0
+        credibilityScore = (try? c.decode(Double.self, forKey: .credibilityScore)) ?? 1.0
+        expertiseTags = (try? c.decode([String].self, forKey: .expertiseTags)) ?? []
+        errorMessage = try? c.decode(String.self, forKey: .errorMessage)
+    }
+}
+
+struct AuthoritiesResponse: Codable {
+    let authorities: [Authority]
+    let count: Int
+}
+
+struct AuthoritySyncResult: Codable {
+    let slug: String
+    let status: String
+    let newPosts: Int?
+    let message: String?
+    let error: String?
+
+    enum CodingKeys: String, CodingKey {
+        case slug, status, message, error
+        case newPosts = "new_posts"
+    }
+}
+
 // MARK: - Analytics models
 
 struct TopQuery: Codable, Identifiable {
@@ -184,4 +251,110 @@ struct RecommendedPost: Codable, Identifiable {
 struct RecommendationsResponse: Codable {
     let recommendations: [RecommendedPost]
     let strategy: String
+}
+
+// MARK: - Insights Feed models
+
+struct InsightsFeedResponse: Codable {
+    let feed: [FeedItem]
+    let trendingTopics: [TrendingTopic]
+    let highlights: [HighlightItem]
+    let resources: ResourcesSummary
+    let platforms: [PlatformCount]
+    let authors: [AuthorStat]
+    let totalPosts: Int
+
+    enum CodingKeys: String, CodingKey {
+        case feed, highlights, resources, platforms, authors
+        case trendingTopics = "trending_topics"
+        case totalPosts = "total_posts"
+    }
+}
+
+struct FeedItem: Codable, Identifiable {
+    var id: String { postId }
+    let type: String
+    let postId: String
+    let author: String
+    let platform: String
+    let url: String?
+    let excerpt: String
+    let likes: Int
+    let comments: Int
+    let reposts: Int
+    let tags: [String]
+    let date: String?
+
+    enum CodingKeys: String, CodingKey {
+        case type, author, platform, url, excerpt, likes, comments, reposts, tags, date
+        case postId = "post_id"
+    }
+}
+
+struct TrendingTopic: Codable, Identifiable {
+    var id: String { tag }
+    let tag: String
+    let taxonomyType: String
+    let postCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case tag
+        case taxonomyType = "taxonomy_type"
+        case postCount = "post_count"
+    }
+}
+
+struct HighlightItem: Codable, Identifiable {
+    var id: String { postId }
+    let postId: String
+    let author: String
+    let platform: String
+    let url: String?
+    let excerpt: String
+    let likes: Int
+    let comments: Int
+    let reposts: Int
+    let engagement: Int
+    let date: String?
+
+    enum CodingKeys: String, CodingKey {
+        case author, platform, url, excerpt, likes, comments, reposts, engagement, date
+        case postId = "post_id"
+    }
+}
+
+struct ResourcesSummary: Codable {
+    let total: Int
+    let byType: [ResourceTypeCount]
+
+    enum CodingKeys: String, CodingKey {
+        case total
+        case byType = "by_type"
+    }
+}
+
+struct ResourceTypeCount: Codable, Identifiable {
+    var id: String { type }
+    let type: String
+    let count: Int
+}
+
+struct PlatformCount: Codable, Identifiable {
+    var id: String { platform }
+    let platform: String
+    let count: Int
+}
+
+struct AuthorStat: Codable, Identifiable {
+    var id: String { author }
+    let author: String
+    let posts: Int
+    let totalLikes: Int
+    let totalComments: Int
+
+    enum CodingKeys: String, CodingKey {
+        case author, posts
+        case totalLikes = "total_likes"
+        case totalComments = "total_comments"
+    }
 }

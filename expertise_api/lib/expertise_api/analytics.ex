@@ -50,4 +50,8 @@ defmodule ExpertiseApi.Analytics do
   def preferences do
     run_cmd(["analytics-preferences"])
   end
+
+  def insights_feed(limit \\ 20) do
+    run_cmd(["insights-feed", "--limit", to_string(limit)])
+  end
 end

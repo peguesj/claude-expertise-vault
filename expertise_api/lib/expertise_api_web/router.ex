@@ -47,5 +47,15 @@ defmodule ExpertiseApiWeb.Router do
     get "/analytics/top-queries", AnalyticsController, :top_queries
     get "/analytics/recommendations", AnalyticsController, :recommendations
     get "/analytics/preferences", AnalyticsController, :preferences
+    get "/analytics/insights-feed", AnalyticsController, :insights_feed
+
+    # Authorities
+    get "/authorities", AuthorityController, :index
+    post "/authorities", AuthorityController, :create
+    get "/authorities/due", AuthorityController, :due
+    get "/authorities/syncer/status", AuthorityController, :syncer_status
+    post "/authorities/recalculate-credibility", AuthorityController, :recalculate_credibility
+    get "/authorities/:slug", AuthorityController, :show
+    post "/authorities/:slug/sync", AuthorityController, :sync
   end
 end

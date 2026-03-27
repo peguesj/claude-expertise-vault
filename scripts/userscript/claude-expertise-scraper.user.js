@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Claude Expertise Scraper
 // @namespace    https://github.com/peguesj/claude-expertise-vault
-// @version      4.0.0
+// @version      4.1.0
 // @description  Intelligent knowledge extraction with AI refinement, analytics, and server sync for the Claude Expertise Vault
 // @author       Claude Expertise Vault
 // @match        *://*/*
@@ -455,6 +455,128 @@ ${(data.text || "").slice(0, 4000)}`;
     // Health check on load + periodic
     checkServerHealth();
     setInterval(checkServerHealth, 60000);
+
+    // Authority auto-detect — check if current page matches a tracked authority
+    checkAuthorityPage();
+  }
+
+  // ── Authority Auto-Detect ─────────────────────────────────────────────────
+
+  var _authorityCooldownKey = "cev_authority_last_auto";
+  var _AUTHORITY_COOLDOWN_MS = 30 * 60 * 1000; // 30 min
+
+  function checkAuthorityPage() {
+    if (!serverOnline) {
+      // Retry once server is confirmed online
+      setTimeout(function () {
+        if (serverOnline) checkAuthorityPage();
+      }, 5000);
+      return;
+    }
+    var currentUrl = window.location.href;
+    var apiUrl = getServerUrl() + "/api/authorities";
+    function doCheck(authorities) {
+      if (!Array.isArray(authorities)) return;
+      var matched = null;
+      for (var i = 0; i < authorities.length; i++) {
+        var auth = authorities[i];
+        if (!auth.profile_url) continue;
+        // Match if current URL starts with the authority profile_url
+        if (currentUrl.indexOf(auth.profile_url) === 0 || auth.profile_url.indexOf(currentUrl.split("?")[0]) === 0) {
+          matched = auth;
+          break;
+        }
+      }
+      if (!matched) return;
+      // Cooldown check — don't auto-scrape same authority more than once per 30 min
+      var cooldowns = {};
+      try { cooldowns = JSON.parse(localStorage.getItem(_authorityCooldownKey) || "{}"); } catch {}
+      var lastRun = cooldowns[matched.slug] || 0;
+      if (Date.now() - lastRun < _AUTHORITY_COOLDOWN_MS) return;
+      // Show auto-detection toast
+      showAuthorityToast(matched.name, matched.status === "browser-only");
+      if (matched.status === "browser-only") {
+        // Auto-scrape and POST
+        setTimeout(function () {
+          autoScrapeAuthority(matched);
+          cooldowns[matched.slug] = Date.now();
+          try { localStorage.setItem(_authorityCooldownKey, JSON.stringify(cooldowns)); } catch {}
+        }, 2000);
+      }
+    }
+    if (typeof GM_xmlhttpRequest === "function") {
+      GM_xmlhttpRequest({
+        method: "GET", url: apiUrl, timeout: 5000,
+        onload: function (r) {
+          try { var d = JSON.parse(r.responseText); doCheck(d.authorities || []); } catch {}
+        },
+        onerror: function () {}
+      });
+    } else {
+      fetch(apiUrl, { signal: AbortSignal.timeout(5000) })
+        .then(function (r) { return r.json(); })
+        .then(function (d) { doCheck(d.authorities || []); })
+        .catch(function () {});
+    }
+  }
+
+  function showAuthorityToast(name, willSync) {
+    var toast = document.createElement("div");
+    var msg = willSync
+      ? "Auto-syncing \u201C" + name + "\u201D to Expertise Vault\u2026"
+      : "\u201C" + name + "\u201D recognized \u2014 open CE panel to sync";
+    toast.setAttribute("style",
+      "position:fixed !important; bottom:80px !important; right:90px !important; z-index:2147483646 !important;" +
+      "background:#7c3aed !important; color:#fff !important; font:13px/1.4 system-ui,sans-serif !important;" +
+      "padding:8px 14px !important; border-radius:8px !important; box-shadow:0 4px 16px rgba(0,0,0,0.4) !important;" +
+      "max-width:260px !important; pointer-events:none !important; opacity:1 !important;" +
+      "transition:opacity 0.4s !important;"
+    );
+    toast.textContent = msg;
+    document.body.appendChild(toast);
+    setTimeout(function () { toast.style.opacity = "0"; }, 4000);
+    setTimeout(function () { if (toast.parentNode) toast.parentNode.removeChild(toast); }, 4600);
+  }
+
+  function autoScrapeAuthority(authority) {
+    // Scrape the current page using the existing extractor and POST to /api/ingest
+    var platform = detectPlatform();
+    var extractor = EX[platform] || EX.blog;
+    var posts = [];
+    try {
+      var multi = extractor.multi();
+      posts = multi;
+    } catch (e) {
+      try {
+        var single = extractor.single();
+        if (single && single.text && single.text.length > 20) posts = [single];
+      } catch {}
+    }
+    if (!posts || posts.length === 0) return;
+    // Tag all posts with authority slug
+    posts = posts.map(function (p) {
+      return Object.assign({}, p, {
+        author: p.author || authority.name,
+        tags: (p.tags || []).concat(["authority-auto-sync"]),
+      });
+    });
+    var body = JSON.stringify({ posts: posts });
+    var ingestUrl = getServerUrl() + "/api/ingest";
+    if (typeof GM_xmlhttpRequest === "function") {
+      GM_xmlhttpRequest({
+        method: "POST", url: ingestUrl,
+        headers: { "Content-Type": "application/json" },
+        data: body, timeout: 15000,
+        onload: function (r) {
+          if (r.status < 300) showAuthorityToast(authority.name + " \u2014 " + posts.length + " posts synced", false);
+        },
+        onerror: function () {}
+      });
+    } else {
+      fetch(ingestUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: body })
+        .then(function () { showAuthorityToast(authority.name + " \u2014 " + posts.length + " posts synced", false); })
+        .catch(function () {});
+    }
   }
 
   // ── Panel Management (Shadow DOM) ────────────────────────────────────────
@@ -496,15 +618,44 @@ ${(data.text || "").slice(0, 4000)}`;
     setPanelHeight(height);
     panelRoot = panelHost.attachShadow({ mode: "open" });
 
-    // 1. Inject CSS directly (NOT from parsed doc) — immune to all CSP/Trusted Types
+    // 1. Inject CSS — try multiple strategies for maximum compatibility.
+    // Shadow DOM isolates from host page CSP, but Tampermonkey sandbox and
+    // Trusted Types can still interfere with certain APIs.
+    var cssApplied = false;
+
+    // Strategy A: <style> element (most reliable in Shadow DOM)
     try {
-      var sheet = new CSSStyleSheet();
-      sheet.replaceSync(CSS);
-      panelRoot.adoptedStyleSheets = [sheet];
-    } catch (_e) {
       var styleEl = document.createElement("style");
       styleEl.textContent = CSS;
       panelRoot.appendChild(styleEl);
+      // Verify it actually has rules (Trusted Types may silently blank it)
+      if (styleEl.sheet && styleEl.sheet.cssRules && styleEl.sheet.cssRules.length > 0) {
+        cssApplied = true;
+      }
+    } catch (_e1) {}
+
+    // Strategy B: adoptedStyleSheets (Chrome 73+, works even if <style> was blocked)
+    if (!cssApplied) {
+      try {
+        var sheet = new CSSStyleSheet();
+        sheet.replaceSync(CSS);
+        panelRoot.adoptedStyleSheets = [sheet];
+        cssApplied = true;
+      } catch (_e2) {}
+    }
+
+    // Strategy C: inline critical layout styles on wrapper (last resort)
+    if (!cssApplied) {
+      try {
+        // Re-attempt <style> with a Trusted Types workaround
+        var s2 = document.createElement("style");
+        panelRoot.appendChild(s2);
+        // Use sheet.insertRule to bypass textContent restrictions
+        var rules = CSS.split("}").filter(function(r) { return r.trim(); });
+        for (var ri = 0; ri < rules.length; ri++) {
+          try { s2.sheet.insertRule(rules[ri] + "}", ri); } catch (_re) {}
+        }
+      } catch (_e3) {}
     }
 
     // 2. Extract body HTML and parse it via DOMParser
@@ -514,8 +665,10 @@ ${(data.text || "").slice(0, 4000)}`;
     var parsed = parser.parseFromString("<html><body>" + bodyHtml + "</body></html>", "text/html");
 
     // 3. Clone body children into wrapper via importNode (not adoptNode)
+    // Apply critical inline styles as ultimate fallback for layout
     var wrapper = document.createElement("div");
     wrapper.className = "cev-panel-inner";
+    wrapper.setAttribute("style", "background:#0f0f1a;color:#e2e2f0;font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;overflow:hidden;display:flex;flex-direction:column;height:100%");
     var children = Array.from(parsed.body.childNodes);
     for (var i = 0; i < children.length; i++) {
       wrapper.appendChild(document.importNode(children[i], true));
@@ -726,7 +879,7 @@ ${(data.text || "").slice(0, 4000)}`;
       '<div class="field"><label>Anthropic API Key</label><input id="s-aikey" type="password" value="' + esc(getS("anthropic_key", "")) + '"/><div class="hint">For AI refinement (claude-haiku-4-5, ~$0.001/refine). Leave blank to disable.</div></div>' +
       '<div class="field"><label>Default Author Override</label><input id="s-author" value="' + esc(getS("default_author", "")) + '"/><div class="hint">Overrides extracted author on every export</div></div>' +
       '<div class="field"><label>Extra Tags</label><input id="s-tags" value="' + esc(getS("extra_tags", "")) + '"/><div class="hint">Comma-separated, always appended to every export</div></div>' +
-      '<div style="padding:8px 0;font-size:11px;color:#888aaa;text-align:center">Server: ' + (serverOnline ? '<span style="color:#22c55e">Online</span>' : '<span style="color:#ef4444">Offline</span>') + ' | v4.0.0</div>' +
+      '<div style="padding:8px 0;font-size:11px;color:#888aaa;text-align:center">Server: ' + (serverOnline ? '<span style="color:#22c55e">Online</span>' : '<span style="color:#ef4444">Offline</span>') + ' | v4.0.1</div>' +
       '</div>' +
       '<div class="ftr"><button class="btn sec" data-action="test">Test Connection</button><button class="btn pri" data-action="save">Save Settings</button></div>'
     );

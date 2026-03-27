@@ -184,6 +184,27 @@ CREATE TABLE IF NOT EXISTS search_interactions (
     dwell_ms INTEGER DEFAULT 0,
     created_at TEXT DEFAULT (datetime('now'))
 );
+
+-- Authority sources registry (known experts/feeds to periodically sync)
+CREATE TABLE IF NOT EXISTS authorities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    profile_url TEXT NOT NULL,
+    fetch_url TEXT,
+    scrape_config TEXT DEFAULT '{}',
+    last_synced_at TEXT,
+    next_sync_at TEXT,
+    post_count INTEGER DEFAULT 0,
+    new_since_last_sync INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'active',
+    error_message TEXT,
+    credibility_score REAL DEFAULT 1.0,
+    expertise_tags TEXT DEFAULT '[]',
+    created_at TEXT DEFAULT (datetime('now')),
+    updated_at TEXT DEFAULT (datetime('now'))
+);
 """
 
 # Indexes for common query patterns
@@ -208,6 +229,10 @@ CREATE INDEX IF NOT EXISTS idx_search_history_created ON search_history(created_
 CREATE INDEX IF NOT EXISTS idx_search_interactions_query ON search_interactions(query);
 CREATE INDEX IF NOT EXISTS idx_search_interactions_post ON search_interactions(post_id);
 CREATE INDEX IF NOT EXISTS idx_user_preferences_tag ON user_preferences(tag);
+CREATE INDEX IF NOT EXISTS idx_authorities_slug ON authorities(slug);
+CREATE INDEX IF NOT EXISTS idx_authorities_status ON authorities(status);
+CREATE INDEX IF NOT EXISTS idx_authorities_platform ON authorities(platform);
+CREATE INDEX IF NOT EXISTS idx_authorities_next_sync ON authorities(next_sync_at);
 """
 
 # ---------------------------------------------------------------------------
@@ -326,12 +351,214 @@ def init_db(db_path: Optional[str] = None) -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
 
-    # Create tables
+    # Create tables and apply migrations
     conn.executescript(SCHEMA_SQL)
     conn.executescript(INDEX_SQL)
+    _run_migrations(conn)
     conn.commit()
 
     return conn
+
+
+# ---------------------------------------------------------------------------
+# Authority source registry
+# ---------------------------------------------------------------------------
+
+SEED_AUTHORITIES = [
+    {
+        "slug": "mitko-vasilev",
+        "name": "Mitko Vasilev",
+        "platform": "linkedin",
+        "profile_url": "https://www.linkedin.com/in/ownyourai/recent-activity/all/",
+        "fetch_url": None,
+        "status": "browser-only",
+        "expertise_tags": '["local-ai","agent-swarms","claude-code","hardware"]',
+        "scrape_config": '{"note":"LinkedIn requires browser session. Auto-syncs when userscript visits this URL."}',
+    },
+    {
+        "slug": "owl-listener",
+        "name": "Owl-Listener",
+        "platform": "github",
+        "profile_url": "https://github.com/Owl-Listener",
+        "fetch_url": "https://api.github.com/users/Owl-Listener/repos",
+        "status": "active",
+        "expertise_tags": '["skills","claude-code","tools"]',
+        "scrape_config": '{"interval_hours":24,"adapter":"github"}',
+    },
+    {
+        "slug": "webpro255",
+        "name": "webpro255",
+        "platform": "github",
+        "profile_url": "https://github.com/webpro255",
+        "fetch_url": "https://api.github.com/users/webpro255/repos",
+        "status": "active",
+        "expertise_tags": '["security","tools","claude-code"]',
+        "scrape_config": '{"interval_hours":24,"adapter":"github"}',
+    },
+    {
+        "slug": "aitmpl",
+        "name": "AITMPL",
+        "platform": "other",
+        "profile_url": "https://www.aitmpl.com/skills",
+        "fetch_url": "https://www.aitmpl.com/skills",
+        "status": "active",
+        "expertise_tags": '["skills","claude-code","tools","frameworks"]',
+        "scrape_config": '{"interval_hours":12,"adapter":"html"}',
+    },
+]
+
+
+def _run_migrations(conn: sqlite3.Connection) -> None:
+    """Apply incremental schema migrations idempotently."""
+    migrations = [
+        "ALTER TABLE posts ADD COLUMN authority_id INTEGER REFERENCES authorities(id)",
+    ]
+    for sql in migrations:
+        try:
+            conn.execute(sql)
+            conn.commit()
+        except Exception:
+            pass  # column/change already exists
+
+
+def _seed_authorities(conn: sqlite3.Connection) -> int:
+    """Seed known authority sources. Skips existing slugs. Returns count inserted."""
+    inserted = 0
+    for auth in SEED_AUTHORITIES:
+        try:
+            conn.execute(
+                """INSERT INTO authorities
+                   (slug, name, platform, profile_url, fetch_url, status, expertise_tags, scrape_config)
+                   VALUES (:slug,:name,:platform,:profile_url,:fetch_url,:status,:expertise_tags,:scrape_config)""",
+                auth,
+            )
+            inserted += 1
+        except Exception:
+            pass  # already seeded
+    conn.commit()
+    return inserted
+
+
+def register_authority(
+    conn: sqlite3.Connection,
+    slug: str,
+    name: str,
+    platform: str,
+    profile_url: str,
+    fetch_url: Optional[str] = None,
+    status: str = "active",
+    scrape_config=None,
+    expertise_tags=None,
+) -> dict:
+    """Register or update an authority source."""
+    config = json.dumps(scrape_config) if isinstance(scrape_config, dict) else (scrape_config or "{}")
+    tags = json.dumps(expertise_tags) if isinstance(expertise_tags, list) else (expertise_tags or "[]")
+    conn.execute(
+        """INSERT INTO authorities (slug,name,platform,profile_url,fetch_url,status,scrape_config,expertise_tags)
+           VALUES (?,?,?,?,?,?,?,?)
+           ON CONFLICT(slug) DO UPDATE SET
+             name=excluded.name, platform=excluded.platform,
+             profile_url=excluded.profile_url, fetch_url=excluded.fetch_url,
+             status=excluded.status, scrape_config=excluded.scrape_config,
+             expertise_tags=excluded.expertise_tags, updated_at=datetime('now')""",
+        (slug, name, platform, profile_url, fetch_url, status, config, tags),
+    )
+    conn.commit()
+    return {"slug": slug, "status": "registered"}
+
+
+def _authority_row_to_dict(row) -> dict:
+    d = dict(row)
+    d["scrape_config"] = json.loads(d.get("scrape_config") or "{}")
+    d["expertise_tags"] = json.loads(d.get("expertise_tags") or "[]")
+    return d
+
+
+def list_authorities(conn: sqlite3.Connection, status: Optional[str] = None) -> list:
+    """List all authorities, optionally filtered by status."""
+    if status:
+        rows = conn.execute(
+            "SELECT * FROM authorities WHERE status=? ORDER BY name", (status,)
+        ).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM authorities ORDER BY name").fetchall()
+    return [_authority_row_to_dict(r) for r in rows]
+
+
+def get_authority(conn: sqlite3.Connection, slug: str) -> Optional[dict]:
+    """Get a single authority by slug."""
+    row = conn.execute("SELECT * FROM authorities WHERE slug=?", (slug,)).fetchone()
+    return _authority_row_to_dict(row) if row else None
+
+
+def update_authority_sync(
+    conn: sqlite3.Connection, slug: str, new_posts: int = 0, error: Optional[str] = None
+) -> None:
+    """Update an authority's sync state after a fetch attempt."""
+    from datetime import timedelta
+    now = datetime.utcnow().isoformat()
+    if error:
+        conn.execute(
+            "UPDATE authorities SET status='error', error_message=?, updated_at=? WHERE slug=?",
+            (str(error), now, slug),
+        )
+    else:
+        row = conn.execute("SELECT scrape_config FROM authorities WHERE slug=?", (slug,)).fetchone()
+        interval_hours = 24
+        if row:
+            try:
+                interval_hours = json.loads(row["scrape_config"] or "{}").get("interval_hours", 24)
+            except Exception:
+                pass
+        next_sync = (datetime.utcnow() + timedelta(hours=interval_hours)).isoformat()
+        conn.execute(
+            """UPDATE authorities SET
+                 last_synced_at=?, next_sync_at=?, new_since_last_sync=?,
+                 post_count=post_count+?, error_message=NULL,
+                 status=CASE WHEN status='error' THEN 'active' ELSE status END,
+                 updated_at=?
+               WHERE slug=?""",
+            (now, next_sync, new_posts, new_posts, now, slug),
+        )
+    conn.commit()
+
+
+def list_due_authorities(conn: sqlite3.Connection) -> list:
+    """Return active authorities due for sync (next_sync_at <= now or never synced)."""
+    now = datetime.utcnow().isoformat()
+    rows = conn.execute(
+        """SELECT * FROM authorities
+           WHERE status='active' AND (next_sync_at IS NULL OR next_sync_at <= ?)
+           ORDER BY next_sync_at ASC""",
+        (now,),
+    ).fetchall()
+    return [_authority_row_to_dict(r) for r in rows]
+
+
+def recalculate_credibility(conn: sqlite3.Connection) -> int:
+    """Recalculate credibility scores based on per-author engagement stats."""
+    import math
+    rows = conn.execute(
+        """SELECT author,
+                  COUNT(*) as post_count,
+                  AVG(likes + comments * 2.0 + reposts * 3.0) as avg_engagement
+           FROM posts GROUP BY author"""
+    ).fetchall()
+    scores = [(r["author"], r["avg_engagement"] or 0) for r in rows]
+    if not scores:
+        return 0
+    max_eng = max(s[1] for s in scores) or 1
+    updated = 0
+    for author, avg_eng in scores:
+        score = math.log(avg_eng + 1) / math.log(max_eng + 1) if max_eng > 0 else 1.0
+        score = max(0.1, min(2.0, round(score, 4)))
+        conn.execute(
+            "UPDATE authorities SET credibility_score=?, updated_at=datetime('now') WHERE name=?",
+            (score, author),
+        )
+        updated += 1
+    conn.commit()
+    return updated
 
 
 def _seed_taxonomy(conn: sqlite3.Connection) -> int:
@@ -1036,10 +1263,59 @@ def cmd_init(args: argparse.Namespace) -> None:
     conn = init_db(args.db)
     inserted = _seed_taxonomy(conn)
     arr_seeded = seed_arrs(conn)
+    auth_seeded = _seed_authorities(conn)
     total = conn.execute("SELECT COUNT(*) as c FROM taxonomy").fetchone()["c"]
     print(f"  Database initialized: {args.db or DEFAULT_DB_PATH}")
     print(f"  Taxonomy: {inserted} new entries seeded ({total} total)")
     print(f"  ARR/RR: {arr_seeded} entries seeded")
+    print(f"  Authorities: {auth_seeded} new sources seeded")
+    conn.close()
+
+
+def cmd_authority_list(args: argparse.Namespace) -> None:
+    conn = init_db(args.db)
+    authorities = list_authorities(conn, status=getattr(args, "status", None) or None)
+    print(json.dumps({"authorities": authorities, "count": len(authorities)}))
+    conn.close()
+
+
+def cmd_authority_add(args: argparse.Namespace) -> None:
+    conn = init_db(args.db)
+    tags = [t.strip() for t in args.tags.split(",")] if getattr(args, "tags", None) else []
+    config = {"interval_hours": args.interval, "adapter": args.adapter} if getattr(args, "adapter", None) else {}
+    result = register_authority(
+        conn, args.slug, args.name, args.platform, args.profile_url,
+        fetch_url=getattr(args, "fetch_url", None),
+        status=getattr(args, "status", None) or "active",
+        scrape_config=config,
+        expertise_tags=tags,
+    )
+    print(json.dumps(result))
+    conn.close()
+
+
+def cmd_authority_due(args: argparse.Namespace) -> None:
+    conn = init_db(args.db)
+    due = list_due_authorities(conn)
+    print(json.dumps({"due": due, "count": len(due)}))
+    conn.close()
+
+
+def cmd_authority_sync_done(args: argparse.Namespace) -> None:
+    conn = init_db(args.db)
+    update_authority_sync(
+        conn, args.slug,
+        new_posts=getattr(args, "new_posts", 0) or 0,
+        error=getattr(args, "error", None),
+    )
+    print(json.dumps({"status": "updated", "slug": args.slug}))
+    conn.close()
+
+
+def cmd_authority_credibility(args: argparse.Namespace) -> None:
+    conn = init_db(args.db)
+    updated = recalculate_credibility(conn)
+    print(json.dumps({"updated": updated, "status": "ok"}))
     conn.close()
 
 
@@ -1263,6 +1539,127 @@ def analytics_recommendations(conn: sqlite3.Connection, limit: int = 10) -> dict
     return {"recommendations": scored[:limit], "strategy": "preference_weighted"}
 
 
+def insights_feed(conn: sqlite3.Connection, limit: int = 20) -> dict:
+    """Generate an automatic insights feed from submissions, engagement, and taxonomy."""
+
+    feed = []
+
+    # 1. Recent submissions (last 7 days, or latest N if none recent)
+    recent = conn.execute(
+        """SELECT id, author, platform, url,
+                  SUBSTR(text, 1, 200) as excerpt,
+                  likes, comments, reposts, scraped_date
+           FROM posts
+           ORDER BY scraped_date DESC
+           LIMIT ?""",
+        (limit,),
+    ).fetchall()
+
+    for r in recent:
+        tags = conn.execute(
+            """SELECT t.name FROM post_tags pt
+               JOIN taxonomy t ON t.id = pt.taxonomy_id
+               WHERE pt.post_id = ?
+               ORDER BY pt.confidence DESC LIMIT 5""",
+            (r["id"],),
+        ).fetchall()
+        feed.append({
+            "type": "submission",
+            "post_id": r["id"],
+            "author": r["author"],
+            "platform": r["platform"],
+            "url": r["url"],
+            "excerpt": r["excerpt"],
+            "likes": r["likes"] or 0,
+            "comments": r["comments"] or 0,
+            "reposts": r["reposts"] or 0,
+            "tags": [t["name"] for t in tags],
+            "date": r["scraped_date"],
+        })
+
+    # 2. Top tags by post count (trending topics)
+    trending = conn.execute(
+        """SELECT t.name, t.type, COUNT(pt.post_id) as post_count
+           FROM taxonomy t
+           JOIN post_tags pt ON pt.taxonomy_id = t.id
+           GROUP BY t.id
+           HAVING post_count >= 2
+           ORDER BY post_count DESC
+           LIMIT 10"""
+    ).fetchall()
+    trending_items = [
+        {"tag": r["name"], "taxonomy_type": r["type"], "post_count": r["post_count"]}
+        for r in trending
+    ]
+
+    # 3. High-engagement highlights (top 5 by composite score)
+    highlights = conn.execute(
+        """SELECT id, author, platform, url,
+                  SUBSTR(text, 1, 200) as excerpt,
+                  likes, comments, reposts, scraped_date,
+                  (COALESCE(likes,0) + COALESCE(comments,0)*2 + COALESCE(reposts,0)*3) as engagement
+           FROM posts
+           ORDER BY engagement DESC
+           LIMIT 5"""
+    ).fetchall()
+    highlight_items = [
+        {
+            "post_id": r["id"], "author": r["author"], "platform": r["platform"],
+            "url": r["url"], "excerpt": r["excerpt"],
+            "likes": r["likes"] or 0, "comments": r["comments"] or 0,
+            "reposts": r["reposts"] or 0, "engagement": r["engagement"],
+            "date": r["scraped_date"],
+        }
+        for r in highlights
+    ]
+
+    # 4. Discovered resources summary
+    resource_counts = conn.execute(
+        """SELECT type, COUNT(*) as count FROM resources
+           GROUP BY type ORDER BY count DESC"""
+    ).fetchall()
+    resources_summary = [{"type": r["type"], "count": r["count"]} for r in resource_counts]
+    total_resources = sum(r["count"] for r in resources_summary)
+
+    # 5. Platform distribution
+    platforms = conn.execute(
+        """SELECT platform, COUNT(*) as count FROM posts
+           GROUP BY platform ORDER BY count DESC"""
+    ).fetchall()
+    platform_dist = [{"platform": r["platform"], "count": r["count"]} for r in platforms]
+
+    # 6. Author stats
+    authors = conn.execute(
+        """SELECT author, COUNT(*) as post_count,
+                  SUM(COALESCE(likes,0)) as total_likes,
+                  SUM(COALESCE(comments,0)) as total_comments
+           FROM posts GROUP BY author ORDER BY post_count DESC"""
+    ).fetchall()
+    author_stats = [
+        {"author": r["author"], "posts": r["post_count"],
+         "total_likes": r["total_likes"] or 0, "total_comments": r["total_comments"] or 0}
+        for r in authors
+    ]
+
+    return {
+        "feed": feed,
+        "trending_topics": trending_items,
+        "highlights": highlight_items,
+        "resources": {"total": total_resources, "by_type": resources_summary},
+        "platforms": platform_dist,
+        "authors": author_stats,
+        "total_posts": len(recent),
+    }
+
+
+def cmd_insights_feed(args: argparse.Namespace) -> None:
+    """Show insights feed."""
+    conn = init_db(args.db)
+    result = insights_feed(conn, args.limit)
+    print(json.dumps(result))
+    conn.close()
+
+
 def cmd_analytics_log(args: argparse.Namespace) -> None:
     """Log a search event from CLI."""
     conn = init_db(args.db)
@@ -1382,6 +1779,38 @@ examples:
     # analytics-recommendations
     subparsers.add_parser("analytics-recommendations", help="Show recommendations")
 
+    # insights-feed
+    if_parser = subparsers.add_parser("insights-feed", help="Auto-generated insights from submissions")
+    if_parser.add_argument("--limit", default=20, type=int)
+
+    # authority-list
+    al_parser = subparsers.add_parser("authority-list", help="List tracked authority sources")
+    al_parser.add_argument("--status", type=str, help="Filter by status (active, paused, error, browser-only)")
+
+    # authority-add
+    aa_parser = subparsers.add_parser("authority-add", help="Register a new authority source")
+    aa_parser.add_argument("--slug", required=True, type=str)
+    aa_parser.add_argument("--name", required=True, type=str)
+    aa_parser.add_argument("--platform", required=True, type=str)
+    aa_parser.add_argument("--profile-url", required=True, type=str, dest="profile_url")
+    aa_parser.add_argument("--fetch-url", type=str, dest="fetch_url")
+    aa_parser.add_argument("--status", type=str, default="active")
+    aa_parser.add_argument("--adapter", type=str, help="Fetch adapter: github, rss, html")
+    aa_parser.add_argument("--interval", type=int, default=24, help="Sync interval in hours")
+    aa_parser.add_argument("--tags", type=str, help="Comma-separated expertise tags")
+
+    # authority-due
+    subparsers.add_parser("authority-due", help="List authorities due for sync")
+
+    # authority-sync-done
+    asd_parser = subparsers.add_parser("authority-sync-done", help="Mark authority sync complete")
+    asd_parser.add_argument("--slug", required=True, type=str)
+    asd_parser.add_argument("--new-posts", type=int, default=0, dest="new_posts")
+    asd_parser.add_argument("--error", type=str, default=None)
+
+    # authority-credibility
+    subparsers.add_parser("authority-credibility", help="Recalculate credibility scores")
+
     args = parser.parse_args()
 
     commands = {
@@ -1397,6 +1826,12 @@ examples:
         "analytics-top": cmd_analytics_top,
         "analytics-preferences": cmd_analytics_preferences,
         "analytics-recommendations": cmd_analytics_recommendations,
+        "insights-feed": cmd_insights_feed,
+        "authority-list": cmd_authority_list,
+        "authority-add": cmd_authority_add,
+        "authority-due": cmd_authority_due,
+        "authority-sync-done": cmd_authority_sync_done,
+        "authority-credibility": cmd_authority_credibility,
     }
 
     commands[args.command](args)

@@ -57,4 +57,14 @@ defmodule ExpertiseApiWeb.AnalyticsController do
         conn |> put_status(500) |> json(%{error: to_string(reason)})
     end
   end
+
+  def insights_feed(conn, params) do
+    limit = params |> Map.get("limit", "20") |> to_string() |> String.to_integer()
+
+    case ExpertiseApi.Analytics.insights_feed(limit) do
+      {:ok, result} -> json(conn, result)
+      {:error, reason} ->
+        conn |> put_status(500) |> json(%{error: to_string(reason)})
+    end
+  end
 end
