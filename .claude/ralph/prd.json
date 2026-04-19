@@ -1,0 +1,72 @@
+{
+  "project": "Claude Expertise Vault",
+  "branchName": "main",
+  "baseBranch": "main",
+  "description": "fmt-004: LinkedIn authentication and RSS adapter integration across all 5 architecture layers",
+  "upm": {
+    "planeProjectId": "957bc85a-62f4-4f56-90cb-4778a3050d47",
+    "checkpointRange": "CP-01 to CP-03",
+    "builtWaves": 1,
+    "verifiedAt": "2026-04-19T00:00:00Z",
+    "shippedAt": null,
+    "prUrl": null
+  },
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "LinkedIn RSS adapter + Playwright auth in fetch.py",
+      "description": "Add linkedin-rss adapter to fetch.py supporting rss.app feed URLs. Create linkedin_auth.py with Playwright browser auth and cookie persistence.",
+      "acceptanceCriteria": [
+        "linkedin-rss adapter in fetch.py handles rss.app URLs",
+        "linkedin_auth.py provides Playwright-based auth with cookie storage",
+        "playwright>=1.40.0 added to requirements.txt",
+        ".gitignore updated for LinkedIn cookie files"
+      ],
+      "estimatedPoints": 3,
+      "dependencies": [],
+      "status": "done",
+      "passes": true,
+      "planeIssueId": "1bf71f1f-e42f-4267-877d-425221fdcaa9",
+      "checkpointId": "CP-01",
+      "wave": 1
+    },
+    {
+      "id": "US-002",
+      "title": "Phoenix LinkedIn auth endpoints + LiveView settings panel",
+      "description": "Create Elixir linkedin_auth.ex module, add REST endpoints for auth status and authentication, extend LiveView with settings panel.",
+      "acceptanceCriteria": [
+        "linkedin_auth.ex module provides auth operations",
+        "POST /api/authorities/linkedin/auth endpoint works",
+        "GET /api/authorities/linkedin/auth-status endpoint works",
+        "Authority controller auto-detects LinkedIn URLs and rss.app feeds",
+        "LiveView search_live.ex has settings panel with LinkedIn auth UI"
+      ],
+      "estimatedPoints": 3,
+      "dependencies": ["US-001"],
+      "status": "done",
+      "passes": true,
+      "planeIssueId": "4b2c5953-d4be-455c-9445-3bcf7a2cbc6a",
+      "checkpointId": "CP-02",
+      "wave": 1
+    },
+    {
+      "id": "US-003",
+      "title": "SwiftUI LinkedIn auth banner + authority row integration",
+      "description": "Add LinkedInAuthStatus model, API client methods, auth banner view, and LinkedIn-aware authority row controls in the macOS menubar app.",
+      "acceptanceCriteria": [
+        "LinkedInAuthStatus Codable model in SearchResult.swift",
+        "APIClient has linkedInAuthStatus() and linkedInAuth() methods",
+        "LinkedInAuthBannerView shows auth status in authorities panel",
+        "AuthorityRowView has LinkedIn-aware sync controls",
+        "SearchViewModel manages LinkedIn auth state and async flows"
+      ],
+      "estimatedPoints": 3,
+      "dependencies": ["US-002"],
+      "status": "done",
+      "passes": true,
+      "planeIssueId": "44f6eeca-9013-4e6b-8b80-cd860a59dd54",
+      "checkpointId": "CP-03",
+      "wave": 1
+    }
+  ]
+}

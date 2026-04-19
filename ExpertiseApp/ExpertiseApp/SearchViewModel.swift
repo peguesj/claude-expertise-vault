@@ -62,6 +62,13 @@ class SearchViewModel: ObservableObject {
     @Published var showAuthorities: Bool = false
     @Published var authorityAction: String? = nil
 
+    // MARK: - LinkedIn Auth
+    @Published var linkedInAuth: LinkedInAuthStatus? = nil
+    @Published var isLinkedInAuthenticating: Bool = false
+    @Published var showLinkedInSettings: Bool = false
+    @Published var manualCookieInput: String = ""
+    @Published var linkedInAuthError: String? = nil
+
     // MARK: - Tasks
     private var searchTask: Task<Void, Never>?
     private var debounceTask: Task<Void, Never>?
@@ -527,12 +534,15 @@ class SearchViewModel: ObservableObject {
 
     func loadAuthorities() async {
         isLoadingAuthorities = true
+        async let authoritiesResult = APIClient.shared.fetchAuthorities()
+        async let authResult: Void = checkLinkedInAuth()
         do {
-            let response = try await APIClient.shared.fetchAuthorities()
+            let response = try await authoritiesResult
             authorities = response.authorities
         } catch {
             authorities = []
         }
+        _ = await authResult
         isLoadingAuthorities = false
     }
 
@@ -551,6 +561,79 @@ class SearchViewModel: ObservableObject {
                 authorityAction = "\(slug): sync failed"
             }
             syncingAuthority = nil
+            clearAuthorityActionAfterDelay()
+        }
+    }
+
+    func checkLinkedInAuth() async {
+        do {
+            linkedInAuth = try await APIClient.shared.linkedInAuthStatus()
+        } catch {
+            linkedInAuth = nil
+        }
+    }
+
+    func authenticateLinkedIn() {
+        guard !isLinkedInAuthenticating else { return }
+        isLinkedInAuthenticating = true
+        authorityAction = "Opening LinkedIn login..."
+        Task {
+            do {
+                let result = try await APIClient.shared.linkedInAuth()
+                linkedInAuth = result
+                if result.valid {
+                    authorityAction = "LinkedIn authenticated"
+                } else {
+                    authorityAction = result.status == "error" ? "Auth failed" : "Authentication incomplete"
+                }
+            } catch {
+                authorityAction = "LinkedIn auth failed"
+            }
+            isLinkedInAuthenticating = false
+            clearAuthorityActionAfterDelay()
+        }
+    }
+
+    func authenticateLinkedInManual() {
+        let cookies = manualCookieInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard cookies.count > 10 else {
+            linkedInAuthError = "Paste your li_at cookie value from browser DevTools"
+            return
+        }
+        guard !isLinkedInAuthenticating else { return }
+        isLinkedInAuthenticating = true
+        linkedInAuthError = nil
+        Task {
+            do {
+                let result = try await APIClient.shared.linkedInAuth(method: "manual", cookies: cookies)
+                linkedInAuth = result
+                if result.valid {
+                    manualCookieInput = ""
+                    authorityAction = "LinkedIn cookies saved"
+                } else {
+                    linkedInAuthError = "Cookies were saved but validation failed -- they may be expired"
+                }
+            } catch {
+                linkedInAuthError = "Failed to save cookies: \(error.localizedDescription)"
+            }
+            isLinkedInAuthenticating = false
+            clearAuthorityActionAfterDelay()
+        }
+    }
+
+    func validateLinkedInCookies() {
+        guard !isLinkedInAuthenticating else { return }
+        isLinkedInAuthenticating = true
+        linkedInAuthError = nil
+        Task {
+            do {
+                let result = try await APIClient.shared.linkedInAuth(method: "validate")
+                linkedInAuth = result
+                authorityAction = result.valid ? "Cookies validated" : "Cookies invalid"
+            } catch {
+                linkedInAuthError = "Validation failed"
+            }
+            isLinkedInAuthenticating = false
             clearAuthorityActionAfterDelay()
         }
     }

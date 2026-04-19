@@ -563,6 +563,9 @@ struct SearchView: View {
 
             Divider()
 
+            // LinkedIn Auth Banner
+            LinkedInAuthBannerView(viewModel: viewModel)
+
             if viewModel.isLoadingAuthorities && viewModel.authorities.isEmpty {
                 VStack(spacing: 8) {
                     ProgressView()
@@ -587,10 +590,11 @@ struct SearchView: View {
                         ForEach(viewModel.authorities) { authority in
                             AuthorityRowView(
                                 authority: authority,
-                                isSyncing: viewModel.syncingAuthority == authority.slug
-                            ) {
-                                viewModel.syncAuthority(authority.slug)
-                            }
+                                isSyncing: viewModel.syncingAuthority == authority.slug,
+                                isLinkedInAuthenticated: viewModel.linkedInAuth?.valid == true,
+                                onSync: { viewModel.syncAuthority(authority.slug) },
+                                onLinkedInAuth: { viewModel.authenticateLinkedIn() }
+                            )
                             Divider().padding(.leading, 44)
                         }
                     }
@@ -1439,21 +1443,429 @@ struct ResultCard: View {
     }
 }
 
+// MARK: - LinkedIn Auth Banner
+
+struct LinkedInAuthBannerView: View {
+    @ObservedObject var viewModel: SearchViewModel
+
+    private var hasLinkedInAuthorities: Bool {
+        viewModel.authorities.contains { $0.platform == "linkedin" }
+    }
+
+    var body: some View {
+        if hasLinkedInAuthorities {
+            HStack(spacing: 8) {
+                Image(systemName: statusIcon)
+                    .font(.system(size: 11))
+                    .foregroundColor(statusColor)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("LinkedIn")
+                        .font(.system(size: 10, weight: .semibold))
+                    Text(statusLabel)
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
+
+                Spacer()
+
+                if viewModel.isLinkedInAuthenticating {
+                    ProgressView()
+                        .scaleEffect(0.6)
+                    Text("Working...")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                } else {
+                    Button(action: { viewModel.showLinkedInSettings = true }) {
+                        HStack(spacing: 3) {
+                            Image(systemName: "gearshape.fill")
+                                .font(.system(size: 9))
+                            Text("Settings")
+                                .font(.system(size: 9, weight: .medium))
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color.purple.opacity(0.12))
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help("Configure LinkedIn authentication")
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(statusColor.opacity(0.04))
+            .sheet(isPresented: $viewModel.showLinkedInSettings) {
+                LinkedInSettingsSheet(viewModel: viewModel)
+            }
+
+            Divider()
+        }
+    }
+
+    private var isAuthenticated: Bool {
+        viewModel.linkedInAuth?.valid == true
+    }
+
+    private var statusIcon: String {
+        guard let auth = viewModel.linkedInAuth else { return "key.slash" }
+        if auth.valid { return "checkmark.shield.fill" }
+        if auth.status == "expired" { return "exclamationmark.shield" }
+        return "key.slash"
+    }
+
+    private var statusColor: Color {
+        guard let auth = viewModel.linkedInAuth else { return .secondary }
+        if auth.valid { return .green }
+        if auth.status == "expired" { return .orange }
+        return .secondary
+    }
+
+    private var statusLabel: String {
+        guard let auth = viewModel.linkedInAuth else { return "Not authenticated" }
+        if auth.valid {
+            let method = auth.method ?? "unknown"
+            return "Authenticated via \(method)"
+        }
+        if auth.status == "expired" { return "Session expired" }
+        return "Not authenticated"
+    }
+}
+
+// MARK: - LinkedIn Settings Sheet
+
+struct LinkedInSettingsSheet: View {
+    @ObservedObject var viewModel: SearchViewModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Image(systemName: "person.crop.square.fill")
+                    .foregroundColor(.blue)
+                Text("LinkedIn Authentication")
+                    .font(.system(size: 14, weight: .semibold))
+                Spacer()
+                Button(action: { dismiss() }) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(.secondary)
+                        .font(.system(size: 16))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding()
+
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    // Status card
+                    linkedInStatusCard
+
+                    Divider()
+
+                    // Browser login method
+                    browserLoginSection
+
+                    Divider()
+
+                    // Manual cookie method
+                    manualCookieSection
+
+                    // Error display
+                    if let error = viewModel.linkedInAuthError {
+                        HStack(spacing: 6) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                                .font(.system(size: 11))
+                            Text(error)
+                                .font(.system(size: 11))
+                                .foregroundColor(.orange)
+                        }
+                        .padding(10)
+                        .background(Color.orange.opacity(0.08))
+                        .cornerRadius(8)
+                    }
+
+                    // Validate section
+                    if viewModel.linkedInAuth?.valid == true {
+                        Divider()
+                        validateSection
+                    }
+                }
+                .padding()
+            }
+        }
+        .frame(width: 420, height: 520)
+        .background(.ultraThinMaterial)
+    }
+
+    // MARK: - Status Card
+
+    private var linkedInStatusCard: some View {
+        HStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(statusColor.opacity(0.15))
+                    .frame(width: 40, height: 40)
+                Image(systemName: statusIcon)
+                    .font(.system(size: 18))
+                    .foregroundColor(statusColor)
+            }
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(statusTitle)
+                    .font(.system(size: 13, weight: .semibold))
+
+                if let auth = viewModel.linkedInAuth, auth.valid {
+                    HStack(spacing: 8) {
+                        if let method = auth.method {
+                            Label(method, systemImage: "checkmark.circle")
+                                .font(.system(size: 10))
+                                .foregroundColor(.green)
+                        }
+                        if let count = auth.cookieCount {
+                            Text("\(count) cookies")
+                                .font(.system(size: 10))
+                                .foregroundColor(.secondary)
+                        }
+                    }
+
+                    if let expires = auth.liAtExpires {
+                        Text("Expires: \(expires)")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+
+                    if let validated = auth.lastValidated {
+                        Text("Last validated: \(validated)")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+                } else {
+                    Text("Authenticate to enable LinkedIn profile scraping")
+                        .font(.system(size: 10))
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            Spacer()
+        }
+        .padding(12)
+        .background(statusColor.opacity(0.04))
+        .cornerRadius(10)
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .stroke(statusColor.opacity(0.15), lineWidth: 0.5)
+        )
+    }
+
+    // MARK: - Browser Login
+
+    private var browserLoginSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "globe")
+                    .foregroundColor(.blue)
+                    .font(.system(size: 12))
+                Text("Browser Login")
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Text("Recommended")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(.blue)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.blue.opacity(0.1))
+                    .clipShape(Capsule())
+            }
+
+            Text("Opens a Playwright browser for you to log in. Handles 2FA and CAPTCHA naturally. Cookies are captured automatically after login.")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .lineSpacing(2)
+
+            Button(action: { viewModel.authenticateLinkedIn() }) {
+                HStack(spacing: 6) {
+                    if viewModel.isLinkedInAuthenticating {
+                        ProgressView()
+                            .scaleEffect(0.6)
+                    }
+                    Image(systemName: "arrow.up.right.square")
+                        .font(.system(size: 11))
+                    Text(viewModel.isLinkedInAuthenticating ? "Waiting for login..." : "Launch Browser Login")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(Color.blue.opacity(0.12))
+                .cornerRadius(8)
+            }
+            .buttonStyle(.plain)
+            .disabled(viewModel.isLinkedInAuthenticating)
+        }
+    }
+
+    // MARK: - Manual Cookie
+
+    private var manualCookieSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "doc.on.clipboard")
+                    .foregroundColor(.orange)
+                    .font(.system(size: 12))
+                Text("Manual Cookie Paste")
+                    .font(.system(size: 12, weight: .semibold))
+                Spacer()
+                Text("Fallback")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.secondary.opacity(0.1))
+                    .clipShape(Capsule())
+            }
+
+            Text("Open LinkedIn in your browser, then DevTools (F12) → Application → Cookies → linkedin.com → copy the **li_at** value.")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+                .lineSpacing(2)
+
+            TextEditor(text: $viewModel.manualCookieInput)
+                .font(.system(size: 10, design: .monospaced))
+                .frame(height: 48)
+                .padding(6)
+                .background(Color.black.opacity(0.2))
+                .cornerRadius(8)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+                )
+                .overlay(alignment: .topLeading) {
+                    if viewModel.manualCookieInput.isEmpty {
+                        Text("li_at=AQE... or full Cookie header")
+                            .font(.system(size: 10, design: .monospaced))
+                            .foregroundColor(.secondary.opacity(0.5))
+                            .padding(10)
+                            .allowsHitTesting(false)
+                    }
+                }
+
+            Button(action: { viewModel.authenticateLinkedInManual() }) {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle")
+                        .font(.system(size: 11))
+                    Text("Save Cookies")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(Color.orange.opacity(0.12))
+                .cornerRadius(8)
+            }
+            .buttonStyle(.plain)
+            .disabled(viewModel.isLinkedInAuthenticating || viewModel.manualCookieInput.trimmingCharacters(in: .whitespacesAndNewlines).count < 10)
+        }
+    }
+
+    // MARK: - Validate
+
+    private var validateSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.shield")
+                    .foregroundColor(.green)
+                    .font(.system(size: 12))
+                Text("Cookie Validation")
+                    .font(.system(size: 12, weight: .semibold))
+            }
+
+            Text("Test that saved cookies are still accepted by LinkedIn's API.")
+                .font(.system(size: 10))
+                .foregroundColor(.secondary)
+
+            Button(action: { viewModel.validateLinkedInCookies() }) {
+                HStack(spacing: 6) {
+                    if viewModel.isLinkedInAuthenticating {
+                        ProgressView()
+                            .scaleEffect(0.6)
+                    }
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11))
+                    Text("Re-validate Now")
+                        .font(.system(size: 11, weight: .medium))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(Color.green.opacity(0.12))
+                .cornerRadius(8)
+            }
+            .buttonStyle(.plain)
+            .disabled(viewModel.isLinkedInAuthenticating)
+        }
+    }
+
+    // MARK: - Helpers
+
+    private var statusColor: Color {
+        guard let auth = viewModel.linkedInAuth else { return .secondary }
+        if auth.valid { return .green }
+        if auth.status == "expired" { return .orange }
+        return .secondary
+    }
+
+    private var statusIcon: String {
+        guard let auth = viewModel.linkedInAuth else { return "key.slash" }
+        if auth.valid { return "checkmark.shield.fill" }
+        if auth.status == "expired" { return "exclamationmark.shield" }
+        return "key.slash"
+    }
+
+    private var statusTitle: String {
+        guard let auth = viewModel.linkedInAuth else { return "Not Authenticated" }
+        if auth.valid { return "Authenticated" }
+        if auth.status == "expired" { return "Session Expired" }
+        return "Not Authenticated"
+    }
+}
+
 // MARK: - AuthorityRowView
 
 struct AuthorityRowView: View {
     let authority: Authority
     let isSyncing: Bool
+    let isLinkedInAuthenticated: Bool
     let onSync: () -> Void
+    let onLinkedInAuth: () -> Void
+
+    init(authority: Authority, isSyncing: Bool, isLinkedInAuthenticated: Bool = false, onSync: @escaping () -> Void, onLinkedInAuth: @escaping () -> Void = {}) {
+        self.authority = authority
+        self.isSyncing = isSyncing
+        self.isLinkedInAuthenticated = isLinkedInAuthenticated
+        self.onSync = onSync
+        self.onLinkedInAuth = onLinkedInAuth
+    }
 
     private var statusColor: Color {
         switch authority.status {
         case "active": return .green
-        case "browser-only": return .orange
+        case "browser-only":
+            // LinkedIn with cookies shows as upgradeable
+            return (authority.platform == "linkedin" && isLinkedInAuthenticated) ? .blue : .orange
         case "paused": return .gray
         case "error": return .red
         default: return .secondary
         }
+    }
+
+    private var effectiveStatus: String {
+        if authority.platform == "linkedin" && authority.status == "browser-only" && isLinkedInAuthenticated {
+            return "cookie-auth"
+        }
+        return authority.status
     }
 
     private var platformIcon: String {
@@ -1482,7 +1894,9 @@ struct AuthorityRowView: View {
                 HStack(spacing: 6) {
                     Text(authority.name)
                         .font(.system(size: 12, weight: .medium))
-                    Text(authority.status)
+
+                    let label = effectiveStatus == "cookie-auth" ? "cookie-auth" : authority.status
+                    Text(label)
                         .font(.system(size: 9, weight: .medium))
                         .foregroundColor(statusColor)
                         .padding(.horizontal, 5)
@@ -1522,7 +1936,16 @@ struct AuthorityRowView: View {
             if isSyncing {
                 ProgressView()
                     .scaleEffect(0.7)
-            } else if authority.status == "browser-only" {
+            } else if authority.platform == "linkedin" && authority.status == "browser-only" && !isLinkedInAuthenticated {
+                // LinkedIn not authenticated — show key icon
+                Button(action: onLinkedInAuth) {
+                    Image(systemName: "key.fill")
+                        .font(.system(size: 11))
+                        .foregroundColor(.orange)
+                }
+                .buttonStyle(.plain)
+                .help("Authenticate LinkedIn to enable sync")
+            } else if authority.status == "browser-only" && authority.platform != "linkedin" {
                 Image(systemName: "safari")
                     .font(.system(size: 11))
                     .foregroundColor(.orange)

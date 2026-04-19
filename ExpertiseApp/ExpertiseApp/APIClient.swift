@@ -250,6 +250,34 @@ actor APIClient {
         return try JSONDecoder().decode(AuthoritySyncResult.self, from: data)
     }
 
+    // MARK: - LinkedIn Auth
+
+    func linkedInAuthStatus() async throws -> LinkedInAuthStatus {
+        let url = baseURL.appendingPathComponent("/api/authorities/linkedin/auth-status")
+        let (data, response) = try await session.data(from: url)
+        guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+            throw APIError.serverError
+        }
+        return try JSONDecoder().decode(LinkedInAuthStatus.self, from: data)
+    }
+
+    func linkedInAuth(method: String = "playwright", cookies: String? = nil) async throws -> LinkedInAuthStatus {
+        let url = baseURL.appendingPathComponent("/api/authorities/linkedin/auth")
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = method == "playwright" ? 360 : 30
+        var body: [String: String] = ["method": method]
+        if let cookies { body["cookies"] = cookies }
+        request.httpBody = try JSONEncoder().encode(body)
+        let (data, response) = try await session.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse,
+              (200...422).contains(httpResponse.statusCode) else {
+            throw APIError.serverError
+        }
+        return try JSONDecoder().decode(LinkedInAuthStatus.self, from: data)
+    }
+
     func fetchSyncerStatus() async throws -> [String: Any] {
         let url = baseURL.appendingPathComponent("/api/authorities/syncer/status")
         let (data, _) = try await session.data(from: url)

@@ -1,8 +1,8 @@
 {
-  "formationId": "fmt-cev-003",
+  "formationId": "fmt-cev-004",
   "projectName": "Claude Expertise Vault",
   "projectKey": "CEV",
-  "description": "Major UX overhaul: liquid glass SwiftUI, personalized start page with learned insights, search analytics, updated chrome extension + userscript, OpenAPI/Scalar developer docs",
+  "description": "LinkedIn authentication and RSS adapter integration — Playwright browser auth, rss.app feed bridge, Phoenix REST endpoints, LiveView settings panel, SwiftUI auth banner and authority row integration",
   "repoUrl": "https://github.com/peguesj/claude-expertise-vault",
   "planeProjectId": "957bc85a-62f4-4f56-90cb-4778a3050d47",
   "planeWorkspace": "lgtm",
@@ -13,223 +13,88 @@
     "done": "24026268-2520-4604-852f-234b889b61a3",
     "cancelled": "e17ec1db-15d8-4a9a-9361-32cbc8b0854f"
   },
-  "branch": "expertise/fmt-003-liquid-glass",
-  "baseBranch": "expertise/fmt-002-arr-insights-design",
-  "createdAt": "2026-03-03T00:00:00Z",
+  "branch": "main",
+  "baseBranch": "main",
+  "createdAt": "2026-04-07T00:00:00Z",
+  "shippedAt": null,
+  "verifiedAt": null,
+  "previousFormation": "fmt-cev-003",
   "squadrons": {
     "alpha": {
-      "name": "Alpha - Infrastructure & Docs",
-      "agents": ["alpha1-openapi", "alpha2-scalar", "alpha3-analytics-schema"]
-    },
-    "bravo": {
-      "name": "Bravo - SwiftUI Liquid Glass",
-      "agents": ["bravo1-glass-ui", "bravo2-start-page", "bravo3-preferences"]
-    },
-    "charlie": {
-      "name": "Charlie - Web & Extension",
-      "agents": ["charlie1-extension", "charlie2-userscript", "charlie3-liveview"]
+      "name": "Alpha - LinkedIn Auth Full Stack",
+      "agents": ["alpha1-python-adapter", "alpha2-elixir-endpoints", "alpha3-swiftui-banner"]
     }
   },
   "waves": [
     {
       "wave": 1,
-      "name": "Foundation",
+      "name": "LinkedIn Auth Vertical Slice",
       "stories": ["US-001", "US-002", "US-003"],
       "squadron": "alpha"
-    },
-    {
-      "wave": 2,
-      "name": "Liquid Glass + Analytics",
-      "stories": ["US-004", "US-005", "US-006"],
-      "squadron": "bravo"
-    },
-    {
-      "wave": 3,
-      "name": "Web & Extension",
-      "stories": ["US-007", "US-008", "US-009"],
-      "squadron": "charlie"
     }
   ],
   "stories": [
     {
       "id": "US-001",
-      "title": "OpenAPI 3.1 spec for the Phoenix Expertise API",
-      "description": "Write openapi.yaml covering all /api/* endpoints (search, ask, stats, health, taxonomy, resources, scan, import, scrape-images, ingest). Include request/response schemas, examples, error shapes.",
+      "title": "LinkedIn RSS adapter + Playwright auth in fetch.py",
+      "description": "Add linkedin-rss adapter to scripts/fetch.py for rss.app feed URLs. New scripts/linkedin_auth.py (516 lines) with Playwright browser auth and cookie persistence. Added playwright>=1.40.0 to requirements.txt.",
       "squadron": "alpha",
-      "agent": "alpha1-openapi",
+      "agent": "alpha1-python-adapter",
       "priority": "P1",
-      "risk": "low",
-      "type": "infrastructure",
+      "risk": "medium",
+      "type": "feature",
       "acceptanceCriteria": [
-        "openapi.yaml at project root",
-        "All 12 endpoints documented with schemas",
-        "Includes server block for localhost:8645"
+        "linkedin-rss adapter handles rss.app URLs in fetch.py",
+        "linkedin_auth.py provides Playwright-based browser auth",
+        "Cookie persistence in data/.linkedin_cookies.json",
+        "playwright>=1.40.0 in requirements.txt",
+        ".gitignore updated for LinkedIn cookie files"
       ],
       "status": "done",
       "passes": true
     },
     {
       "id": "US-002",
-      "title": "Scalar API reference hosted at /docs",
-      "description": "Integrate Scalar CDN into the Phoenix app. Mount at /docs route serving the OpenAPI spec with interactive try-it-out. Dark theme. Add CORS for local dev.",
+      "title": "Phoenix LinkedIn auth endpoints + LiveView settings panel",
+      "description": "New linkedin_auth.ex Elixir module. REST endpoints POST /api/authorities/linkedin/auth and GET /api/authorities/linkedin/auth-status. Authority controller enhanced with LinkedIn auto-detect. LiveView settings panel with auth UI.",
       "squadron": "alpha",
-      "agent": "alpha2-scalar",
+      "agent": "alpha2-elixir-endpoints",
       "priority": "P1",
-      "risk": "low",
-      "type": "infrastructure",
+      "risk": "medium",
+      "type": "feature",
       "depends_on": ["US-001"],
       "acceptanceCriteria": [
-        "GET /docs serves interactive API reference",
-        "Dark theme consistent with app",
-        "Try-it-out works against localhost:8645",
-        "openapi.yaml served at /api/openapi.yaml"
+        "linkedin_auth.ex module in expertise_api",
+        "POST /api/authorities/linkedin/auth works",
+        "GET /api/authorities/linkedin/auth-status works",
+        "Authority controller auto-detects LinkedIn URLs",
+        "rss.app URL auto-configures linkedin-rss adapter",
+        "LiveView search_live.ex has settings panel"
       ],
       "status": "done",
       "passes": true
     },
     {
       "id": "US-003",
-      "title": "Search analytics tracking + SQLite schema",
-      "description": "Add search_history and user_preferences tables to expertise.db. Phoenix endpoints: POST /api/analytics/search, POST /api/analytics/interaction, GET /api/analytics/top-queries, GET /api/analytics/recommendations, GET /api/analytics/preferences. Python database.py analytics commands. SwiftUI APIClient sends analytics on each search/ask.",
+      "title": "SwiftUI LinkedIn auth banner + authority row integration",
+      "description": "LinkedInAuthStatus Codable model. APIClient linkedInAuthStatus() and linkedInAuth() methods. LinkedInAuthBannerView component. Enhanced AuthorityRowView with LinkedIn-aware sync controls. SearchViewModel LinkedIn auth state management.",
       "squadron": "alpha",
-      "agent": "alpha3-analytics-schema",
-      "priority": "P0",
-      "risk": "medium",
-      "type": "feature",
-      "acceptanceCriteria": [
-        "search_history table created on db init",
-        "user_preferences table created on db init",
-        "POST /api/analytics/search logs every search/ask",
-        "POST /api/analytics/interaction logs result clicks and dwell",
-        "GET /api/analytics/top-queries returns top 20",
-        "GET /api/analytics/recommendations returns personalized suggestions",
-        "GET /api/analytics/preferences returns user preference vector"
-      ],
-      "status": "done",
-      "passes": true
-    },
-    {
-      "id": "US-004",
-      "title": "SwiftUI Liquid Glass material redesign",
-      "description": "Apply liquid glass design language to all views: SearchView header uses .ultraThinMaterial, ResultCard uses .regularMaterial with glass border, InsightsPanelCard uses tinted glass, toolbar uses .bar material. Smooth spring animations on all state transitions. Follow swiftui-expert best practices.",
-      "squadron": "bravo",
-      "agent": "bravo1-glass-ui",
-      "priority": "P0",
-      "risk": "medium",
-      "type": "design",
-      "acceptanceCriteria": [
-        "All cards use .regularMaterial or .ultraThinMaterial backgrounds",
-        "Glass border effect on ResultCard and InsightsPanelCard",
-        "Spring animations on panel open/close, mode switch, stats toggle",
-        "Builds clean on macOS 14+",
-        "No visual regression on dark/light mode"
-      ],
-      "status": "done",
-      "passes": true
-    },
-    {
-      "id": "US-005",
-      "title": "Personalized Start Page with hand-picked insights",
-      "description": "New StartPageView shown when query is empty. Shows: (1) For You section with top 5 posts by engagement + user preference score, (2) Trending section with posts gaining traction, (3) Recent Searches chips for quick re-query, (4) Discover section with random high-value unseen posts. Powered by analytics endpoints from US-003. Uses liquid glass cards from US-004.",
-      "squadron": "bravo",
-      "agent": "bravo2-start-page",
-      "priority": "P0",
-      "risk": "high",
-      "type": "feature",
-      "depends_on": ["US-003", "US-004"],
-      "acceptanceCriteria": [
-        "StartPageView renders when query is empty",
-        "For You section shows top 5 personalized recommendations",
-        "Trending section shows 3 posts with rising engagement",
-        "Recent Searches chips fire search on tap",
-        "Discover section shows 3 random unseen high-value posts",
-        "Liquid glass card design for each section"
-      ],
-      "status": "done",
-      "passes": true
-    },
-    {
-      "id": "US-006",
-      "title": "Preference learning model from search behavior",
-      "description": "Track which results users click, dwell time proxy, quick-ask chip usage, taxonomy category affinity. Store as weighted topic preferences in user_preferences. Preferences decay over time (half-life 30 days). Search results re-ranked by preference. Powers Start Page For You section.",
-      "squadron": "bravo",
-      "agent": "bravo3-preferences",
-      "priority": "P1",
-      "risk": "high",
-      "type": "feature",
-      "depends_on": ["US-003"],
-      "acceptanceCriteria": [
-        "Tracks query topics, result clicks, dwell time, category affinity",
-        "Preferences stored in user_preferences table",
-        "Preferences decay with 30-day half-life",
-        "Search results re-ranked by preference score",
-        "SwiftUI sends interaction analytics"
-      ],
-      "status": "done",
-      "passes": true
-    },
-    {
-      "id": "US-007",
-      "title": "Chrome extension v4 - full server integration",
-      "description": "Chrome Manifest V3 extension with: popup search/ask UI, background service worker for health monitoring, context menu Send to Expertise Vault for selected text, options page for server URL, badge showing server status (green/red). Supports all /api/* endpoints.",
-      "squadron": "charlie",
-      "agent": "charlie1-extension",
-      "priority": "P1",
-      "risk": "medium",
-      "type": "feature",
-      "acceptanceCriteria": [
-        "Manifest V3 compliant",
-        "Popup UI with search and ask modes",
-        "Context menu integration for selected text",
-        "Options page with server URL config",
-        "Badge icon reflects server connectivity"
-      ],
-      "status": "done",
-      "passes": true
-    },
-    {
-      "id": "US-008",
-      "title": "Userscript v4 - server sync + analytics",
-      "description": "Update claude-expertise-scraper.user.js to v4.0: sync with all server endpoints, auto-detect server status, support analytics endpoints, settings panel with server URL + API key config, batch export with progress indicator.",
-      "squadron": "charlie",
-      "agent": "charlie2-userscript",
+      "agent": "alpha3-swiftui-banner",
       "priority": "P1",
       "risk": "low",
       "type": "feature",
+      "depends_on": ["US-002"],
       "acceptanceCriteria": [
-        "Version bumped to 4.0.0",
-        "Server health check on script load",
-        "All new API endpoints accessible",
-        "Analytics tracking for ingested posts",
-        "Settings panel with server URL config",
-        "Batch export with progress bar"
-      ],
-      "status": "done",
-      "passes": true
-    },
-    {
-      "id": "US-009",
-      "title": "Phoenix LiveView refresh - glass theme + new routes",
-      "description": "Update LiveView UI to match liquid glass aesthetic. Add routes: GET /docs (Scalar), GET /api/openapi.yaml, analytics endpoints. Update DaisyUI theme with glass/frosted effects. Ensure Mermaid diagram support preserved.",
-      "squadron": "charlie",
-      "agent": "charlie3-liveview",
-      "priority": "P2",
-      "risk": "low",
-      "type": "design",
-      "depends_on": ["US-001", "US-002"],
-      "acceptanceCriteria": [
-        "/docs route serves Scalar API reference",
-        "/api/openapi.yaml serves the spec",
-        "Analytics endpoints registered in router",
-        "DaisyUI glass theme applied",
-        "All existing functionality preserved"
+        "LinkedInAuthStatus model in SearchResult.swift",
+        "API client methods for LinkedIn auth",
+        "LinkedInAuthBannerView in SearchView.swift",
+        "AuthorityRowView has LinkedIn-aware controls",
+        "ViewModel manages async auth check/authenticate flows"
       ],
       "status": "done",
       "passes": true
     }
   ],
-  "totalStories": 9,
-  "builtWaves": 3,
-  "shippedAt": null,
-  "verifiedAt": null
+  "totalStories": 3,
+  "builtWaves": 1
 }

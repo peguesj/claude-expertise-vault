@@ -1,4 +1,17 @@
 {
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "curl -s -X POST http://localhost:3032/api/heartbeat -H 'Content-Type: application/json' -d '{\"agent_id\":\"$CLAUDE_SESSION_ID\",\"status\":\"working\",\"message\":\"PreToolUse\"}' >/dev/null 2>&1",
+            "type": "command"
+          }
+        ],
+        "matcher": ".*"
+      }
+    ]
+  },
   "permissions": {
     "allow": [
       "Bash(pip install *)",

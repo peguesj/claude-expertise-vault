@@ -3,10 +3,11 @@
 Authority fetcher — periodically pulls new content from tracked expert sources.
 
 Supports:
-  github  — GitHub public repos + events via REST API (no auth required)
-  rss     — Any RSS/Atom feed via feedparser
-  html    — Generic HTML page with basic content extraction
-  linkedin / browser-only — Returns instructions; requires userscript sync
+  github       — GitHub public repos + events via REST API (no auth required)
+  rss          — Any RSS/Atom feed via feedparser
+  html         — Generic HTML page with basic content extraction
+  linkedin-rss — LinkedIn via rss.app RSS bridge (requires rss.app feed URL)
+  linkedin / browser-only — Fallback: returns instructions for userscript sync
 
 Usage:
     python scripts/fetch.py --slug mitko-vasilev
@@ -57,6 +58,29 @@ def _now_iso() -> str:
 
 def _slug_from_text(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
+def _is_rss_app_url(url: str) -> bool:
+    """Check if a URL is an rss.app feed URL."""
+    return bool(re.match(r"https?://(www\.)?rss\.app/feeds?/", url))
+
+
+def _is_linkedin_url(url: str) -> bool:
+    """Check if a URL is a LinkedIn profile/company/newsletter URL."""
+    return bool(re.match(r"https?://(www\.)?linkedin\.com/", url))
+
+
+def _has_linkedin_cookies() -> bool:
+    """Check if LinkedIn auth cookies exist and metadata says they're valid."""
+    meta_path = BASE_DIR / "data" / ".linkedin_auth_meta.json"
+    if not meta_path.exists():
+        return False
+    try:
+        with open(meta_path) as f:
+            meta = json.load(f)
+        return meta.get("valid", False)
+    except Exception:
+        return False
 
 
 def _load_seen_ids(slug: str) -> set:
@@ -320,12 +344,230 @@ def fetch_html(authority: dict, seen_ids: set, dry_run: bool = False) -> list:
     }]
 
 
+# ── LinkedIn RSS adapter (via rss.app) ───────────────────────────────────────
+
+def _extract_linkedin_images(html_text: str) -> list:
+    """Pull image URLs from rss.app HTML content (LinkedIn embeds images inline)."""
+    return re.findall(r'<img[^>]+src=["\']([^"\']+)["\']', html_text)
+
+
+def _extract_linkedin_links(html_text: str) -> list:
+    """Pull outbound links from rss.app HTML content."""
+    links = re.findall(r'<a[^>]+href=["\']([^"\']+)["\']', html_text)
+    return [l for l in links if "linkedin.com" in l or not l.startswith("#")]
+
+
+def fetch_linkedin_rss(authority: dict, seen_ids: set, dry_run: bool = False) -> list:
+    """Fetch LinkedIn posts via an rss.app RSS feed bridge.
+
+    Requires authority['fetch_url'] to be a valid rss.app feed URL
+    (e.g. https://rss.app/feeds/<id>.xml). The feed is standard RSS/Atom
+    but entries are LinkedIn posts — we normalize them to our schema with
+    platform='linkedin' and extract embedded images/links.
+    """
+    fetch_url = authority.get("fetch_url", "")
+    if not fetch_url:
+        return []
+
+    slug = authority["slug"]
+    profile_url = authority.get("profile_url", "")
+    posts = []
+
+    raw = _http_get(fetch_url, headers={
+        "Accept": "application/rss+xml, application/atom+xml, text/xml, */*",
+    })
+    if not raw:
+        return []
+
+    # Parse with feedparser if available, fallback to regex
+    try:
+        import feedparser
+        feed = feedparser.parse(raw)
+        for entry in feed.entries:
+            entry_id = entry.get("id") or entry.get("link", "")
+            post_id = f"linkedin-rss-{slug}-{_slug_from_text(entry_id)[:40]}"
+            if post_id in seen_ids:
+                continue
+
+            title = entry.get("title", "")
+            # rss.app preserves HTML in summary/content — extract text + media
+            raw_html = entry.get("summary") or ""
+            if not raw_html and entry.get("content"):
+                raw_html = entry["content"][0].get("value", "")
+
+            media = _extract_linkedin_images(raw_html)
+            links = _extract_linkedin_links(raw_html)
+
+            # Clean HTML to plain text
+            text_body = re.sub(r"<[^>]+>", " ", raw_html).strip()
+            text_body = re.sub(r"\s{2,}", " ", text_body)
+            text = f"{title}\n\n{text_body}".strip() if title != text_body else text_body
+
+            if len(text) < 30:
+                continue
+
+            published = entry.get("published") or entry.get("updated") or _now_iso()
+            entry_link = entry.get("link", profile_url)
+
+            posts.append({
+                "id": post_id,
+                "author": authority["name"],
+                "platform": "linkedin",
+                "url": entry_link,
+                "text": text,
+                "date": published,
+                "scraped_date": _now_iso(),
+                "likes": 0,
+                "comments": 0,
+                "reposts": 0,
+                "tags": [t.get("term", "") for t in entry.get("tags", []) if t.get("term")],
+                "media": media,
+                "links": links or [entry_link],
+                "authority_slug": slug,
+            })
+    except ImportError:
+        # Fallback: basic XML parsing without feedparser
+        text_raw = raw.decode("utf-8", errors="replace")
+        items = re.findall(r"<item>(.*?)</item>", text_raw, re.DOTALL)
+        items += re.findall(r"<entry>(.*?)</entry>", text_raw, re.DOTALL)
+        for item in items:
+            title_m = re.search(r"<title[^>]*>(.*?)</title>", item, re.DOTALL)
+            link_m = re.search(r"<link[^>]*>(.*?)</link>|<link[^>]+href=['\"]([^'\"]+)['\"]", item, re.DOTALL)
+            desc_m = re.search(r"<description[^>]*>(.*?)</description>|<summary[^>]*>(.*?)</summary>", item, re.DOTALL)
+
+            title = re.sub(r"<[^>]+>|<!\[CDATA\[|\]\]>", "", title_m.group(1) if title_m else "").strip()
+            link = ""
+            if link_m:
+                link = (link_m.group(1) or link_m.group(2) or "").strip()
+            link = link or profile_url
+
+            raw_desc = (desc_m.group(1) or desc_m.group(2)) if desc_m else ""
+            media = _extract_linkedin_images(raw_desc)
+            links_found = _extract_linkedin_links(raw_desc)
+            desc = re.sub(r"<[^>]+>|<!\[CDATA\[|\]\]>", " ", raw_desc).strip()
+            desc = re.sub(r"\s{2,}", " ", desc)
+
+            text = f"{title}\n\n{desc}".strip()
+            if len(text) < 30:
+                continue
+
+            post_id = f"linkedin-rss-{slug}-{_slug_from_text(link)[:40]}"
+            if post_id in seen_ids:
+                continue
+
+            posts.append({
+                "id": post_id,
+                "author": authority["name"],
+                "platform": "linkedin",
+                "url": link,
+                "text": text,
+                "scraped_date": _now_iso(),
+                "likes": 0, "comments": 0, "reposts": 0,
+                "tags": [], "media": media, "links": links_found or [link],
+                "authority_slug": slug,
+            })
+
+    return posts
+
+
+# ── LinkedIn Scraper adapter (cookie-authenticated) ──────────────────────────
+
+def fetch_linkedin_scraper(authority: dict, seen_ids: set, dry_run: bool = False) -> list:
+    """Fetch LinkedIn posts via authenticated cookie-based scraping.
+
+    Uses scripts/linkedin_auth.py to scrape a profile's recent activity
+    with stored session cookies. Requires prior authentication.
+    """
+    profile_url = authority.get("profile_url", "")
+    slug = authority["slug"]
+
+    # Extract username from LinkedIn URL
+    match = re.search(r"linkedin\.com/in/([^/?#\s]+)", profile_url)
+    if not match:
+        # Try company URL
+        match = re.search(r"linkedin\.com/company/([^/?#\s]+)", profile_url)
+    if not match:
+        return []
+
+    username = match.group(1).rstrip("/")
+
+    # Call linkedin_auth.py scrape
+    import subprocess
+    auth_script = BASE_DIR / "scripts" / "linkedin_auth.py"
+    try:
+        result = subprocess.run(
+            [sys.executable, str(auth_script), "scrape", "--username", username, "--max-posts", "30"],
+            cwd=str(BASE_DIR),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            print(f"  [linkedin-scraper] scrape failed: {result.stderr}", file=sys.stderr)
+            return []
+        data = json.loads(result.stdout)
+    except Exception as e:
+        print(f"  [linkedin-scraper] error: {e}", file=sys.stderr)
+        return []
+
+    if data.get("status") in ("error", "auth_expired"):
+        print(f"  [linkedin-scraper] {data.get('error', 'unknown error')}", file=sys.stderr)
+        return []
+
+    posts = []
+    for raw_post in data.get("posts", []):
+        post_id = raw_post.get("id", f"linkedin-scrape-{slug}-{len(posts)}")
+        if post_id in seen_ids:
+            continue
+
+        text = raw_post.get("text", "")
+        if len(text) < 30:
+            continue
+
+        posts.append({
+            "id": post_id,
+            "author": authority["name"],
+            "platform": "linkedin",
+            "url": raw_post.get("url", profile_url),
+            "text": text,
+            "scraped_date": _now_iso(),
+            "likes": 0,
+            "comments": 0,
+            "reposts": 0,
+            "tags": [],
+            "media": raw_post.get("images", []),
+            "links": [raw_post.get("url", profile_url)],
+            "authority_slug": slug,
+        })
+
+    return posts
+
+
+# ── RSSHub adapter (self-hosted LinkedIn company feeds) ──────────────────────
+
+def _is_rsshub_url(url: str) -> bool:
+    """Detect RSSHub URLs (self-hosted or public instances)."""
+    return bool(re.match(r"https?://.*/(linkedin|rsshub)/", url)) or "rsshub" in url.lower()
+
+
+def fetch_rsshub(authority: dict, seen_ids: set, dry_run: bool = False) -> list:
+    """Fetch from a self-hosted RSSHub instance. Wraps the RSS adapter with LinkedIn normalization."""
+    # RSSHub outputs standard RSS — reuse the RSS adapter but fix platform
+    posts = fetch_rss(authority, seen_ids, dry_run=dry_run)
+    for post in posts:
+        post["platform"] = "linkedin"
+    return posts
+
+
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 
 ADAPTERS = {
     "github": fetch_github,
     "rss": fetch_rss,
     "html": fetch_html,
+    "linkedin-rss": fetch_linkedin_rss,
+    "linkedin-scraper": fetch_linkedin_scraper,
+    "rsshub": fetch_rsshub,
 }
 
 
@@ -346,22 +588,50 @@ def fetch_authority(slug: str, db_path: Optional[str] = None, dry_run: bool = Fa
         return {"slug": slug, "status": "error", "error": f"Authority '{slug}' not found"}
 
     status = authority.get("status", "active")
-    if status == "browser-only":
+    config = authority.get("scrape_config", {})
+    platform = authority.get("platform", "")
+    fetch_url = authority.get("fetch_url") or ""
+
+    # Smart LinkedIn routing: try best available adapter
+    if platform == "linkedin":
+        explicit_adapter = config.get("adapter", "")
+        if explicit_adapter and explicit_adapter in ADAPTERS:
+            adapter_name = explicit_adapter
+        elif fetch_url and _is_rss_app_url(fetch_url):
+            adapter_name = "linkedin-rss"
+        elif fetch_url and _is_rsshub_url(fetch_url):
+            adapter_name = "rsshub"
+        elif _has_linkedin_cookies():
+            adapter_name = "linkedin-scraper"
+        elif status == "browser-only" or not fetch_url:
+            hints = [
+                "Options to enable automatic sync:",
+                "  1. Authenticate: python scripts/linkedin_auth.py auth",
+                "  2. RSS bridge: https://rss.app/rss-feed/linkedin (set as fetch_url)",
+                "  3. Self-hosted: RSSHub /linkedin/company/<id>/posts (set as fetch_url)",
+            ]
+            return {
+                "slug": slug,
+                "status": "browser-only",
+                "message": f"'{authority['name']}' requires setup for automatic sync.",
+                "hints": hints,
+                "profile_url": authority["profile_url"],
+            }
+        else:
+            adapter_name = "linkedin-rss"  # Default: try RSS with whatever fetch_url
+    elif status == "browser-only":
         return {
             "slug": slug,
             "status": "browser-only",
             "message": f"'{authority['name']}' requires browser sync via the Tampermonkey userscript.",
             "profile_url": authority["profile_url"],
         }
-    if status == "paused":
+    elif status == "paused":
         return {"slug": slug, "status": "paused"}
-
-    # Choose adapter
-    config = authority.get("scrape_config", {})
-    adapter_name = config.get("adapter", "")
-    platform = authority.get("platform", "")
-    if not adapter_name:
-        adapter_name = "github" if platform == "github" else "rss" if platform in ("blog", "rss") else "html"
+    else:
+        adapter_name = config.get("adapter", "")
+        if not adapter_name:
+            adapter_name = "github" if platform == "github" else "rss" if platform in ("blog", "rss") else "html"
 
     adapter = ADAPTERS.get(adapter_name)
     if not adapter:

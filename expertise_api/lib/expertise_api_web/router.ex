@@ -55,6 +55,11 @@ defmodule ExpertiseApiWeb.Router do
     get "/authorities/due", AuthorityController, :due
     get "/authorities/syncer/status", AuthorityController, :syncer_status
     post "/authorities/recalculate-credibility", AuthorityController, :recalculate_credibility
+
+    # LinkedIn authentication
+    post "/authorities/linkedin/auth", AuthorityController, :linkedin_auth
+    get "/authorities/linkedin/auth-status", AuthorityController, :linkedin_auth_status
+
     get "/authorities/:slug", AuthorityController, :show
     post "/authorities/:slug/sync", AuthorityController, :sync
   end

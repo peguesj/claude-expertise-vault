@@ -20,7 +20,7 @@ Catalogue, vectorize, and make searchable the expert knowledge shared by Claude 
 ├── VERSION                      # Canonical version — single source of truth
 ├── CLAUDE.md                    # This file — project overview & conventions
 ├── openapi.yaml                 # Full OpenAPI 3.1.0 spec (API v4.1.0)
-├── prd.json                     # Formation history (fmt-cev-001 through fmt-cev-003)
+├── prd.json                     # Formation history (fmt-cev-001 through fmt-cev-004)
 ├── .claude/
 │   ├── settings.json            # Claude Code project settings
 │   ├── hooks/                   # Pre/post tool use hooks
@@ -273,3 +273,4 @@ Load `extension/` as an unpacked extension in Chrome/Edge.
 | fmt-cev-001 | Initial commit — 4-layer stack | Complete |
 | fmt-cev-002 | ARR/insights design, Mermaid, expertise skill, auto-taxonomy | Complete |
 | fmt-cev-003 | Liquid glass UI, analytics, VIKI autosync, extension v4, userscript v4, authority system | Complete |
+| fmt-cev-004 | LinkedIn auth (Playwright + RSS adapter), Phoenix endpoints, SwiftUI auth banner | Complete |

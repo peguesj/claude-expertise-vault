@@ -26,5 +26,9 @@ ExpertiseApp/.swiftpm/
 data/images/
 data/expertise.db
 
+# LinkedIn auth cookies (sensitive)
+data/.linkedin_cookies.json
+data/.linkedin_auth_meta.json
+
 # Hooks logs
 .claude/hooks/logs/

@@ -190,6 +190,40 @@ struct AuthoritySyncResult: Codable {
     }
 }
 
+// MARK: - LinkedIn Auth models
+
+struct LinkedInAuthStatus: Codable {
+    let status: String
+    let valid: Bool
+    let method: String?
+    let authenticatedAt: String?
+    let lastValidated: String?
+    let cookieCount: Int?
+    let needsRevalidation: Bool?
+    let liAtExpires: String?
+
+    enum CodingKeys: String, CodingKey {
+        case status, valid, method
+        case authenticatedAt = "authenticated_at"
+        case lastValidated = "last_validated"
+        case cookieCount = "cookie_count"
+        case needsRevalidation = "needs_revalidation"
+        case liAtExpires = "li_at_expires"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        status = (try? c.decode(String.self, forKey: .status)) ?? "unknown"
+        valid = (try? c.decode(Bool.self, forKey: .valid)) ?? false
+        method = try? c.decode(String.self, forKey: .method)
+        authenticatedAt = try? c.decode(String.self, forKey: .authenticatedAt)
+        lastValidated = try? c.decode(String.self, forKey: .lastValidated)
+        cookieCount = try? c.decode(Int.self, forKey: .cookieCount)
+        needsRevalidation = try? c.decode(Bool.self, forKey: .needsRevalidation)
+        liAtExpires = try? c.decode(String.self, forKey: .liAtExpires)
+    }
+}
+
 // MARK: - Analytics models
 
 struct TopQuery: Codable, Identifiable {
